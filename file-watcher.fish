@@ -114,7 +114,7 @@ function is_archive
     set -l ext (string lower (string match -r '\.[^.]+$' "$file"))
     
     switch $ext
-        case .zip .tar .tgz .tbz .tbz2 .txz
+        case .zip .tar .tgz .tbz .tbz2 .txz .7z .rar
             return 0
         case .gz .bz2 .xz
             # Check if it's a .tar.gz, .tar.bz2, etc.
@@ -133,6 +133,10 @@ function list_archive_contents
     
     if string match -q '*.zip' "$ext"
         unzip -Z1 "$file" 2>/dev/null
+    else if string match -q '*.7z' "$ext"
+        7z l "$file" 2>/dev/null
+    else if string match -q '*.rar' "$ext"
+        unrar l "$file" 2>/dev/null
     else if string match -q '*.tar' "$ext"
         tar -tf "$file" 2>/dev/null
     else if string match -q '*.tar.gz' "$ext"; or string match -q '*.tgz' "$ext"
@@ -152,6 +156,10 @@ function extract_file_from_archive
     
     if string match -q '*.zip' "$ext"
         unzip -j -o "$archive" "$target_file" -d "$dest_dir" 2>/dev/null
+    else if string match -q '*.7z' "$ext"
+        7z e -o"$dest_dir" -y "$archive" "$target_file" 2>/dev/null
+    else if string match -q '*.rar' "$ext"
+        unrar e -y "$archive" "$target_file" "$dest_dir" 2>/dev/null
     else if string match -q '*.tar' "$ext"
         tar -xf "$archive" -C "$dest_dir" --strip-components=(string split '/' "$target_file" | count; math $x - 1) "$target_file" 2>/dev/null
         # Simpler approach: extract to temp and move
@@ -241,7 +249,7 @@ function process_existing_files
     
     # Check archives if enabled
     if test "$EXTRACT_ARCHIVES" = true
-        for archive in $watch_dir/*.{zip,tar,tar.gz,tgz,tar.bz2,tbz,tbz2,tar.xz,txz}
+        for archive in $watch_dir/*.{zip,tar,tar.gz,tgz,tar.bz2,tbz,tbz2,tar.xz,txz,7z,rar}
             if test -f "$archive"
                 process_archive "$archive" $pattern "$dest_dir"
             end
@@ -309,7 +317,7 @@ function watch_with_polling
         
         # Check archives if enabled
         if test "$EXTRACT_ARCHIVES" = true
-            for archive in $watch_dir/*.{zip,tar,tar.gz,tgz,tar.bz2,tbz,tbz2,tar.xz,txz}
+            for archive in $watch_dir/*.{zip,tar,tar.gz,tgz,tar.bz2,tbz,tbz2,tar.xz,txz,7z,rar}
                 if test -f "$archive"
                     if not contains "$archive" $seen_files
                         set -a seen_files "$archive"

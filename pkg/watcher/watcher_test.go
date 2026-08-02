@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"file-watcher/pkg/logging"
+	"file-watcher/pkg/logger"
 )
 
 func createZipFile(t *testing.T, dir, filename string, files map[string]string) string {
@@ -45,14 +45,14 @@ func TestWatcherPollingMode(t *testing.T) {
 	}
 	defer os.RemoveAll(destDir)
 
-	logger := logging.NewConsoleLogger(nil)
+	l := logger.NewConsoleLogger(nil)
 	w, err := New(Options{
 		WatchDir:     watchDir,
 		Pattern:      "*.pdf",
 		DestDir:      destDir,
 		PollInterval: 100 * time.Millisecond,
 		UsePolling:   true,
-		Logger:       logger,
+		Logger:       l,
 	})
 	if err != nil {
 		t.Fatalf("failed to create watcher: %v", err)
@@ -104,14 +104,14 @@ func TestWatcherFSNotifyMode(t *testing.T) {
 	}
 	defer os.RemoveAll(destDir)
 
-	logger := logging.NewConsoleLogger(nil)
+	l := logger.NewConsoleLogger(nil)
 	w, err := New(Options{
 		WatchDir:      watchDir,
 		Pattern:       "*.png",
 		DestDir:       destDir,
 		DebounceDelay: 50 * time.Millisecond,
 		UsePolling:    false,
-		Logger:        logger,
+		Logger:        l,
 	})
 	if err != nil {
 		t.Fatalf("failed to create watcher: %v", err)
@@ -167,7 +167,7 @@ func TestWatcherArchiveExtraction(t *testing.T) {
 		"sample.pdf": "zip pdf content",
 	})
 
-	logger := logging.NewConsoleLogger(nil)
+	l := logger.NewConsoleLogger(nil)
 	w, err := New(Options{
 		WatchDir:        watchDir,
 		Pattern:         "*.pdf",
@@ -175,7 +175,7 @@ func TestWatcherArchiveExtraction(t *testing.T) {
 		ExtractArchives: true,
 		PollInterval:    100 * time.Millisecond,
 		UsePolling:      true,
-		Logger:          logger,
+		Logger:          l,
 	})
 	if err != nil {
 		t.Fatalf("failed to create watcher: %v", err)

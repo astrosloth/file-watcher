@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"file-watcher/pkg/config"
-	"file-watcher/pkg/logging"
+	"file-watcher/pkg/logger"
 	"file-watcher/pkg/watcher"
 )
 
@@ -84,24 +84,24 @@ func runMain() int {
 	}
 
 	// Configure logger
-	var logger *slog.Logger
+	var appLogger *slog.Logger
 	if logFile != "" {
 		expandedLogFile := config.ExpandPath(logFile)
-		fileLogger, err := logging.NewFileLogger(expandedLogFile, maxLogSize)
+		fileLogger, err := logger.NewFileLogger(expandedLogFile, maxLogSize)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR: Failed to initialize file logger: %v\n", err)
 			return 1
 		}
-		logger = fileLogger
+		appLogger = fileLogger
 	} else {
-		logger = logging.NewConsoleLogger(os.Stdout)
+		appLogger = logger.NewConsoleLogger(os.Stdout)
 	}
 
 	// Setup PID file
 	if pidFile != "" {
 		expandedPidFile := config.ExpandPath(pidFile)
 		if err := writePidFile(expandedPidFile); err != nil {
-			logger.Error("Failed to write PID file", "path", expandedPidFile, "error", err)
+			appLogger.Error("Failed to write PID file", "path", expandedPidFile, "error", err)
 		} else {
 			defer os.Remove(expandedPidFile)
 		}
@@ -118,11 +118,11 @@ func runMain() int {
 		expandedConfig := config.ExpandPath(configFile)
 		cfg, err := config.LoadConfig(expandedConfig)
 		if err != nil {
-			logger.Error("Failed to load config file", "path", expandedConfig, "error", err)
+			appLogger.Error("Failed to load config file", "path", expandedConfig, "error", err)
 			return 1
 		}
 
-		logger.Info("Starting file-watcher with multi-watch config", "count", len(cfg.Watches), "config", expandedConfig)
+		appLogger.Info("Starting file-watcher with multi-watch config", "count", len(cfg.Watches), "config", expandedConfig)
 
 		for _, wCfg := range cfg.Watches {
 			intval := time.Duration(wCfg.PollInterval) * time.Second
@@ -145,10 +145,10 @@ func runMain() int {
 				ExtractArchives: isExtract,
 				PollInterval:    intval,
 				UsePolling:      isPoll,
-				Logger:          logger.With("watch", wCfg.Name),
+				Logger:          appLogger.With("watch", wCfg.Name),
 			})
 			if err != nil {
-				logger.Error("Failed to create watch", "watch", wCfg.Name, "error", err)
+				appLogger.Error("Failed to create watch", "watch", wCfg.Name, "error", err)
 				continue
 			}
 
@@ -156,7 +156,7 @@ func runMain() int {
 			go func(w *watcher.Watcher, name string) {
 				defer wg.Done()
 				if err := w.Start(ctx); err != nil && err != context.Canceled {
-					logger.Error("Watcher stopped with error", "watch", name, "error", err)
+					appLogger.Error("Watcher stopped with error", "watch", name, "error", err)
 				}
 			}(w, wCfg.Name)
 		}
@@ -178,10 +178,10 @@ func runMain() int {
 			ExtractArchives: extractArchives,
 			PollInterval:    pollInterval,
 			UsePolling:      usePolling,
-			Logger:          logger,
+			Logger:          appLogger,
 		})
 		if err != nil {
-			logger.Error("Failed to initialize watcher", "error", err)
+			appLogger.Error("Failed to initialize watcher", "error", err)
 			return 1
 		}
 
@@ -189,16 +189,16 @@ func runMain() int {
 		go func() {
 			defer wg.Done()
 			if err := w.Start(ctx); err != nil && err != context.Canceled {
-				logger.Error("Watcher stopped with error", "error", err)
+				appLogger.Error("Watcher stopped with error", "error", err)
 			}
 		}()
 	}
 
-	logger.Info("file-watcher process running. Press Ctrl+C to stop.")
+	appLogger.Info("file-watcher process running. Press Ctrl+C to stop.")
 	<-ctx.Done()
-	logger.Info("Shutting down file-watcher gracefully...")
+	appLogger.Info("Shutting down file-watcher gracefully...")
 	wg.Wait()
-	logger.Info("Shutdown complete.")
+	appLogger.Info("Shutdown complete.")
 	return 0
 }
 

@@ -1,12 +1,8 @@
-// Package archive provides functionality for inspecting archive files (.zip, .tar, .tar.gz, .tar.bz2, .tar.xz)
+// Package archive provides functionality for inspecting archive files (.zip, .tar, .tar.gz, .tar.bz2, .tar.xz, .7z, .rar)
 // and extracting single-file payloads matching target pattern specifications.
 package archive
 
 import (
-	"archive/tar"
-	"archive/zip"
-	"compress/bzip2"
-	"compress/gzip"
 	"fmt"
 	"io"
 	"os"
@@ -14,14 +10,14 @@ import (
 	"strings"
 
 	"file-watcher/pkg/pattern"
-	"github.com/ulikunitz/xz"
 )
 
-// IsArchive checks if the file path has a supported archive extension.
-func IsArchive(path string) bool {
+// IsSupported checks if the file path has a supported archive extension.
+func IsSupported(path string) bool {
 	lower := strings.ToLower(path)
 	extensions := []string{
 		".zip", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz", ".tbz2", ".tar.xz", ".txz",
+		".7z", ".rar",
 	}
 	for _, ext := range extensions {
 		if strings.HasSuffix(lower, ext) {
@@ -39,152 +35,106 @@ func InspectAndExtractSingleFile(archivePath, targetPattern, destDir string) (bo
 	if strings.HasSuffix(lower, ".zip") {
 		return inspectAndExtractZip(archivePath, targetPattern, destDir)
 	}
+	if strings.HasSuffix(lower, ".7z") {
+		return inspectAndExtract7z(archivePath, targetPattern, destDir)
+	}
+	if strings.HasSuffix(lower, ".rar") {
+		return inspectAndExtractRar(archivePath, targetPattern, destDir)
+	}
 	return inspectAndExtractTar(archivePath, targetPattern, destDir)
 }
 
-// inspectAndExtractZip handles streaming inspection and extraction of zip archives.
-func inspectAndExtractZip(archivePath, targetPattern, destDir string) (bool, string, error) {
-	r, err := zip.OpenReader(archivePath)
-	if err != nil {
-		return false, "", fmt.Errorf("failed to open zip: %w", err)
-	}
-
-	var targetFile *zip.File
-	fileCount := 0
-
-	for _, f := range r.File {
-		fInfo := f.FileInfo()
-		if fInfo.IsDir() || strings.HasSuffix(f.Name, "/") {
-			continue
-		}
-		fileCount++
-		if fileCount > 1 {
-			_ = r.Close()
-			return false, "", nil
-		}
-		targetFile = f
-	}
-
-	if fileCount != 1 || targetFile == nil {
-		_ = r.Close()
+// matchSinglePayload validates if the archive contains exactly one file entry matching targetPattern.
+func matchSinglePayload(entryName string, fileCount int, targetPattern string) (bool, string, error) {
+	if fileCount != 1 || entryName == "" {
 		return false, "", nil
 	}
-
-	baseName := filepath.Base(targetFile.Name)
+	baseName := filepath.Base(entryName)
 	matched, err := pattern.Match(targetPattern, baseName)
 	if err != nil || !matched {
-		_ = r.Close()
 		return false, "", err
 	}
+	return true, baseName, nil
+}
 
-	rc, err := targetFile.Open()
-	if err != nil {
-		_ = r.Close()
-		return false, "", fmt.Errorf("failed to open zip entry: %w", err)
-	}
-
-	destPath, err := extractStream(rc, baseName, destDir)
-	_ = rc.Close()
-	_ = r.Close()
-
+// finalizeExtraction removes the original archive file upon successful extraction and returns extraction results.
+func finalizeExtraction(archivePath, destPath string, err error) (bool, string, error) {
 	if err != nil {
 		return false, "", err
 	}
-
 	_ = os.Remove(archivePath)
 	return true, destPath, nil
 }
 
-// inspectAndExtractTar handles two-pass streaming inspection and extraction of tar-based archives (.tar, .tar.gz, .tar.bz2, .tar.xz).
-func inspectAndExtractTar(archivePath, targetPattern, destDir string) (bool, string, error) {
-	// Pass 1: Count files and check for single file match
-	file, err := os.Open(archivePath)
+type entryItem struct {
+	Name string
+}
+
+type archiveIterator interface {
+	Next() (*entryItem, io.Reader, error)
+	Close() error
+}
+
+// inspectAndExtractSequential handles two-pass inspection and extraction for stream-based archives (e.g. TAR, RAR).
+func inspectAndExtractSequential(archivePath, targetPattern, destDir string, openIter func() (archiveIterator, error)) (bool, string, error) {
+	// Pass 1: Count files and record single entry name
+	iter, err := openIter()
 	if err != nil {
 		return false, "", err
 	}
 
-	decomp, err := openDecompressor(file, archivePath)
-	if err != nil {
-		_ = file.Close()
-		return false, "", err
-	}
-
-	tr := tar.NewReader(decomp)
 	var singleEntryName string
 	fileCount := 0
 
 	for {
-		hdr, err := tr.Next()
+		item, _, err := iter.Next()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			closeDecompressor(decomp)
-			_ = file.Close()
+			_ = iter.Close()
 			return false, "", err
-		}
-
-		if hdr.Typeflag == tar.TypeDir || strings.HasSuffix(hdr.Name, "/") {
-			continue
 		}
 
 		fileCount++
 		if fileCount > 1 {
 			break
 		}
-		singleEntryName = hdr.Name
+		singleEntryName = item.Name
+	}
+	_ = iter.Close()
+
+	ok, baseName, err := matchSinglePayload(singleEntryName, fileCount, targetPattern)
+	if !ok || err != nil {
+		return ok, "", err
 	}
 
-	closeDecompressor(decomp)
-	_ = file.Close()
-
-	if fileCount != 1 {
-		return false, "", nil
-	}
-
-	baseName := filepath.Base(singleEntryName)
-	matched, err := pattern.Match(targetPattern, baseName)
-	if err != nil || !matched {
-		return false, "", err
-	}
-
-	// Pass 2: Extract the single target entry
-	file2, err := os.Open(archivePath)
+	// Pass 2: Extract target entry
+	iter2, err := openIter()
 	if err != nil {
 		return false, "", err
 	}
+	defer iter2.Close()
 
-	decomp2, err := openDecompressor(file2, archivePath)
-	if err != nil {
-		_ = file2.Close()
-		return false, "", err
-	}
-
-	tr2 := tar.NewReader(decomp2)
 	var destPath string
 	var extractErr error
 
 	for {
-		hdr, err := tr2.Next()
+		item, r, err := iter2.Next()
+		if err == io.EOF {
+			break
+		}
 		if err != nil {
 			extractErr = err
 			break
 		}
-		if hdr.Name == singleEntryName {
-			destPath, extractErr = extractStream(tr2, baseName, destDir)
+		if item.Name == singleEntryName {
+			destPath, extractErr = extractStream(r, baseName, destDir)
 			break
 		}
 	}
 
-	closeDecompressor(decomp2)
-	_ = file2.Close()
-
-	if extractErr != nil {
-		return false, "", extractErr
-	}
-
-	_ = os.Remove(archivePath)
-	return true, destPath, nil
+	return finalizeExtraction(archivePath, destPath, extractErr)
 }
 
 // extractStream copies from an entry stream reader r to destDir, resolving filename collisions.
@@ -217,26 +167,4 @@ func extractStream(r io.Reader, baseName, destDir string) (string, error) {
 	}
 
 	return destPath, nil
-}
-
-// openDecompressor wraps r in a decompression reader (gzip, bzip2, xz) based on the archive file extension.
-func openDecompressor(r io.Reader, path string) (io.Reader, error) {
-	lower := strings.ToLower(path)
-	if strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz") {
-		return gzip.NewReader(r)
-	}
-	if strings.HasSuffix(lower, ".tar.bz2") || strings.HasSuffix(lower, ".tbz") || strings.HasSuffix(lower, ".tbz2") {
-		return bzip2.NewReader(r), nil
-	}
-	if strings.HasSuffix(lower, ".tar.xz") || strings.HasSuffix(lower, ".txz") {
-		return xz.NewReader(r)
-	}
-	return r, nil
-}
-
-// closeDecompressor closes r if it implements io.Closer.
-func closeDecompressor(r io.Reader) {
-	if cl, ok := r.(io.Closer); ok {
-		_ = cl.Close()
-	}
 }

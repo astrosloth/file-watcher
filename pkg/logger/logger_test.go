@@ -1,4 +1,4 @@
-package logging_test
+package logger_test
 
 import (
 	"bytes"
@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"file-watcher/pkg/logging"
+	"file-watcher/pkg/logger"
 )
 
 func TestRotatingLogger(t *testing.T) {
@@ -19,14 +19,14 @@ func TestRotatingLogger(t *testing.T) {
 
 	logFile := filepath.Join(tmpDir, "test.log")
 	// Small max size to trigger rotation (100 bytes)
-	logger, err := logging.NewFileLogger(logFile, 100)
+	l, err := logger.NewFileLogger(logFile, 100)
 	if err != nil {
 		t.Fatalf("failed to create file logger: %v", err)
 	}
 
 	// Write enough log messages to exceed 100 bytes
 	for i := 0; i < 10; i++ {
-		logger.Info("This is a test log line meant to exceed size limit", "index", i)
+		l.Info("This is a test log line meant to exceed size limit", "index", i)
 	}
 
 	// Check if backup log file test.log.1 was created
@@ -46,8 +46,8 @@ func TestRotatingLogger(t *testing.T) {
 
 func TestConsoleLogger(t *testing.T) {
 	var buf bytes.Buffer
-	logger := logging.NewConsoleLogger(&buf)
-	logger.Info("console test message", "key", "val")
+	l := logger.NewConsoleLogger(&buf)
+	l.Info("console test message", "key", "val")
 
 	if !strings.Contains(buf.String(), "console test message") {
 		t.Errorf("console logger output missing expected string: %s", buf.String())
@@ -62,7 +62,7 @@ func TestRotatingWriterClose(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	logFile := filepath.Join(tmpDir, "close.log")
-	rw, err := logging.NewRotatingWriter(logFile, 1024)
+	rw, err := logger.NewRotatingWriter(logFile, 1024)
 	if err != nil {
 		t.Fatalf("failed to create rotating writer: %v", err)
 	}

@@ -111,7 +111,7 @@ func createTestTarXz(t *testing.T, files map[string]string) string {
 	return tmpFile.Name()
 }
 
-func TestIsArchive(t *testing.T) {
+func TestIsSupported(t *testing.T) {
 	tests := []struct {
 		filename string
 		expected bool
@@ -122,12 +122,14 @@ func TestIsArchive(t *testing.T) {
 		{"archive.tgz", true},
 		{"archive.tar.bz2", true},
 		{"archive.tar.xz", true},
+		{"archive.7z", true},
+		{"archive.rar", true},
 	}
 
 	for _, tt := range tests {
-		got := archive.IsArchive(tt.filename)
+		got := archive.IsSupported(tt.filename)
 		if got != tt.expected {
-			t.Errorf("IsArchive(%q) = %v; want %v", tt.filename, got, tt.expected)
+			t.Errorf("IsSupported(%q) = %v; want %v", tt.filename, got, tt.expected)
 		}
 	}
 }
@@ -256,6 +258,48 @@ func TestInspectAndExtractSingleFile(t *testing.T) {
 		bzr := bzip2.NewReader(buf)
 		if bzr == nil {
 			t.Fatalf("bzip2 reader nil")
+		}
+	})
+
+	t.Run("invalid 7z file returns error", func(t *testing.T) {
+		tmpFile, err := os.CreateTemp("", "invalid_*.7z")
+		if err != nil {
+			t.Fatalf("failed to create temp 7z: %v", err)
+		}
+		defer os.Remove(tmpFile.Name())
+		_, _ = tmpFile.Write([]byte("not a real 7z archive"))
+		_ = tmpFile.Close()
+
+		destDir, err := os.MkdirTemp("", "dest_7z_*")
+		if err != nil {
+			t.Fatalf("failed to create dest temp dir: %v", err)
+		}
+		defer os.RemoveAll(destDir)
+
+		_, _, err = archive.InspectAndExtractSingleFile(tmpFile.Name(), "*.pdf", destDir)
+		if err == nil {
+			t.Errorf("expected error when inspecting invalid 7z archive")
+		}
+	})
+
+	t.Run("invalid rar file returns error", func(t *testing.T) {
+		tmpFile, err := os.CreateTemp("", "invalid_*.rar")
+		if err != nil {
+			t.Fatalf("failed to create temp rar: %v", err)
+		}
+		defer os.Remove(tmpFile.Name())
+		_, _ = tmpFile.Write([]byte("not a real rar archive"))
+		_ = tmpFile.Close()
+
+		destDir, err := os.MkdirTemp("", "dest_rar_*")
+		if err != nil {
+			t.Fatalf("failed to create dest temp dir: %v", err)
+		}
+		defer os.RemoveAll(destDir)
+
+		_, _, err = archive.InspectAndExtractSingleFile(tmpFile.Name(), "*.pdf", destDir)
+		if err == nil {
+			t.Errorf("expected error when inspecting invalid rar archive")
 		}
 	})
 }

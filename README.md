@@ -11,7 +11,7 @@ Supports **Windows**, **Linux**, and **macOS**.
 - **Cross-Platform**: Built with native Go system APIs (`fsnotify`), supporting Windows, macOS, and Linux out-of-the-box without requiring external tools.
 - **Event-Driven & Polling Fallback**: Uses OS file system events (`inotify` / ReadDirectoryChangesW / FSEvents) with configurable polling fallback mode.
 - **Brace Expansion Globbing**: Advanced pattern matching supporting brace expansion (e.g., `*.{jpg,jpeg,png,gif,webp}`).
-- **Single-File Archive Extraction**: Pure Go stream extraction for `.zip`, `.tar`, `.tar.gz`, `.tgz`, `.tar.bz2`, `.tbz`, `.tar.xz`, `.txz` archives containing a single matching file.
+- **Single-File Archive Extraction**: Pure Go stream extraction for `.zip`, `.tar`, `.tar.gz`, `.tgz`, `.tar.bz2`, `.tbz`, `.tar.xz`, `.txz`, `.7z`, `.rar` archives containing a single matching file.
 - **Duplicate Filename Resolution**: Automatically appends counters (`file_1.pdf`, `file_2.pdf`) to avoid overwriting existing files.
 - **File Write Stabilization / Debouncing**: Built-in debouncer to prevent moving incomplete/partial writes (browser downloads, large file transfers).
 - **Structured Log Rotation (`log/slog`)**: Size-based automatic log file rotation.

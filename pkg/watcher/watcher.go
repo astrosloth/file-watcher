@@ -124,7 +124,7 @@ func (w *Watcher) handleFile(path string) error {
 	}
 
 	// 1. Single-file archive extraction
-	if w.opts.ExtractArchives && archive.IsArchive(path) {
+	if w.opts.ExtractArchives && archive.IsSupported(path) {
 		extracted, destPath, err := archive.InspectAndExtractSingleFile(path, w.opts.Pattern, w.opts.DestDir)
 		if err != nil {
 			w.opts.Logger.Error("Failed processing archive", "archive", baseName, "error", err)

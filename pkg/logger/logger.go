@@ -1,5 +1,5 @@
-// Package logging provides size-rotating file logger capabilities and structured console logging.
-package logging
+// Package logger provides size-rotating file logger capabilities and structured console logging.
+package logger
 
 import (
 	"fmt"
