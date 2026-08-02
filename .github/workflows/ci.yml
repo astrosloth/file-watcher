@@ -15,6 +15,10 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         go: ['1.22', '1.23']
 
+    defaults:
+      run:
+        shell: bash
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -31,13 +35,13 @@ jobs:
             gofmt -s -l .
             exit 1
           fi
-        shell: bash
 
       - name: Run Go Vet
         run: go vet ./...
 
       - name: Run Unit Tests with Race Detector
-        run: go test -v -race -coverprofile=coverage.out ./...
+        run: go test -v -race "-coverprofile=coverage.out" ./...
 
       - name: Build Binary
         run: go build -v ./cmd/file-watcher
+
