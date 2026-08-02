@@ -1,3 +1,6 @@
+// Package main provides the command-line interface entry point for file-watcher,
+// supporting CLI arguments, multi-watch INI configuration files, daemon defaults,
+// and signal-based graceful shutdown.
 package main
 
 import (
@@ -20,10 +23,13 @@ import (
 
 const version = "1.0.0"
 
+// main is the application entry point, delegating logic to runMain and exiting with its status code.
 func main() {
 	os.Exit(runMain())
 }
 
+// runMain parses command-line flags, initializes loggers and PID files, starts watch instances,
+// and handles graceful shutdown upon receiving OS termination signals. Returns the exit status code.
 func runMain() int {
 	var (
 		configFile      string
@@ -196,6 +202,7 @@ func runMain() int {
 	return 0
 }
 
+// isFlagPassed checks if a specific flag name was explicitly passed in command-line arguments.
 func isFlagPassed(name string) bool {
 	found := false
 	flag.Visit(func(f *flag.Flag) {
@@ -206,6 +213,7 @@ func isFlagPassed(name string) bool {
 	return found
 }
 
+// writePidFile creates any missing parent directories and writes the current process ID to pidFile.
 func writePidFile(pidFile string) error {
 	if err := os.MkdirAll(filepath.Dir(pidFile), 0755); err != nil {
 		return err
@@ -214,6 +222,7 @@ func writePidFile(pidFile string) error {
 	return os.WriteFile(pidFile, []byte(strconv.Itoa(pid)), 0644)
 }
 
+// printUsage prints application usage instructions and flag defaults to stdout.
 func printUsage() {
 	fmt.Printf("file-watcher v%s\n\n", version)
 	fmt.Println("Usage: file-watcher [options] <watch_dir> <pattern> <dest_dir>")

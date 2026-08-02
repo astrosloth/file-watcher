@@ -15,13 +15,15 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+// Watcher monitors a specified directory for new or updated files, matching them
+// against a pattern and moving or extracting them to a destination directory.
 type Watcher struct {
 	opts    Options
 	mu      sync.Mutex
 	pending map[string]*time.Timer
 }
 
-// New creates a new Watcher instance with the specified Options struct.
+// New initializes and validates a new Watcher instance with default fallback settings for missing options.
 func New(opts Options) (*Watcher, error) {
 	if opts.WatchDir == "" {
 		return nil, fmt.Errorf("watch directory cannot be empty")
@@ -45,6 +47,8 @@ func New(opts Options) (*Watcher, error) {
 	}, nil
 }
 
+// Start initiates the directory watching process using event-driven notification (fsnotify)
+// or periodic polling depending on configuration options. Blocks until the provided context is canceled.
 func (w *Watcher) Start(ctx context.Context) error {
 	if w.opts.DestDir != "" {
 		if err := os.MkdirAll(w.opts.DestDir, 0755); err != nil {
@@ -67,6 +71,7 @@ func (w *Watcher) Start(ctx context.Context) error {
 	return w.runFSNotify(ctx)
 }
 
+// stopPendingTimers cancels all active debouncing timers on shutdown.
 func (w *Watcher) stopPendingTimers() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -76,6 +81,7 @@ func (w *Watcher) stopPendingTimers() {
 	}
 }
 
+// processExistingFiles scans the watch directory for pre-existing files matching the pattern.
 func (w *Watcher) processExistingFiles(ctx context.Context) {
 	entries, err := os.ReadDir(w.opts.WatchDir)
 	if err != nil {
@@ -99,6 +105,8 @@ func (w *Watcher) processExistingFiles(ctx context.Context) {
 	}
 }
 
+// handleFile processes an individual file, handling pattern matching, archive extraction,
+// filename collision resolution, and moving the file to the destination directory.
 func (w *Watcher) handleFile(path string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -158,6 +166,7 @@ func (w *Watcher) handleFile(path string) error {
 	return nil
 }
 
+// runFSNotify runs the event-driven watcher loop using operating system inotify/fsnotify events.
 func (w *Watcher) runFSNotify(ctx context.Context) error {
 	fsWatcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -200,6 +209,7 @@ func (w *Watcher) runFSNotify(ctx context.Context) error {
 	}
 }
 
+// scheduleDebounced schedules or resets a debouncing timer for targetPath to prevent race conditions.
 func (w *Watcher) scheduleDebounced(targetPath string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -219,6 +229,7 @@ func (w *Watcher) scheduleDebounced(targetPath string) {
 	})
 }
 
+// runPolling runs a fallback polling loop scanning the watch directory at fixed intervals.
 func (w *Watcher) runPolling(ctx context.Context) error {
 	ticker := time.NewTicker(w.opts.PollInterval)
 	defer ticker.Stop()
@@ -235,6 +246,8 @@ func (w *Watcher) runPolling(ctx context.Context) error {
 	}
 }
 
+// copyAndRemove copies a file from src to dst and removes src upon success.
+// If the copy or file close operation fails, dst is removed to prevent partial files.
 func copyAndRemove(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -248,14 +261,14 @@ func copyAndRemove(src, dst string) error {
 	}
 
 	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		os.Remove(dst)
+		_ = out.Close()
+		_ = os.Remove(dst)
 		return err
 	}
 
 	_ = in.Close()
 	if err := out.Close(); err != nil {
-		os.Remove(dst)
+		_ = os.Remove(dst)
 		return err
 	}
 

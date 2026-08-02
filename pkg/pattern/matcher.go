@@ -1,3 +1,5 @@
+// Package pattern provides string pattern matching algorithms, glob brace expansion,
+// and target filename collision resolution utilities.
 package pattern
 
 import (
@@ -7,7 +9,7 @@ import (
 )
 
 // ExpandBraces expands a pattern containing brace expressions like "*.{jpg,png}" into a slice of patterns.
-// e.g. "*.{jpg,png}" -> ["*.jpg", "*.png"]
+// For example: "*.{jpg,png}" -> ["*.jpg", "*.png"]. Supports recursive nested brace expressions.
 func ExpandBraces(pat string) []string {
 	start := strings.IndexByte(pat, '{')
 	if start == -1 {
@@ -34,7 +36,7 @@ func ExpandBraces(pat string) []string {
 	return results
 }
 
-// Match checks whether a filename matches a glob pattern, supporting brace expansion (e.g., "*.{jpg,png}").
+// Match checks whether a filename matches a glob pattern, supporting brace expansion (e.g. "*.{jpg,png}").
 func Match(pattern, filename string) (bool, error) {
 	subPatterns := ExpandBraces(pattern)
 	for _, pat := range subPatterns {
@@ -49,7 +51,8 @@ func Match(pattern, filename string) (bool, error) {
 	return false, nil
 }
 
-// ResolveTarget generates a unique filename if targetFilename already exists in destination.
+// ResolveTarget generates a unique filename if targetFilename already exists in destination
+// by appending an incrementing integer suffix before the file extension (e.g. "doc_1.pdf").
 func ResolveTarget(targetFilename string, exists func(string) bool) string {
 	if !exists(targetFilename) {
 		return targetFilename

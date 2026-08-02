@@ -1,3 +1,5 @@
+// Package config provides configuration parsing, path expansion, and validation
+// for multi-watch INI files.
 package config
 
 import (
@@ -11,21 +13,34 @@ import (
 
 // WatchConfig defines settings for a single folder watch job.
 type WatchConfig struct {
-	Name            string
-	Dir             string
-	Pattern         string
-	Dest            string
+	// Name is the section identifier for the watch job (e.g. "pdfs", "images").
+	Name string
+
+	// Dir is the directory path being monitored for incoming files.
+	Dir string
+
+	// Pattern is the glob pattern matched against incoming files.
+	Pattern string
+
+	// Dest is the destination directory for matched files.
+	Dest string
+
+	// ExtractArchives specifies whether single-file matching archives should be extracted.
 	ExtractArchives bool
-	PollInterval    int // in seconds
-	UsePolling      bool
+
+	// PollInterval is the polling frequency in seconds (default: 5).
+	PollInterval int
+
+	// UsePolling forces polling mode over event-driven (fsnotify) monitoring.
+	UsePolling bool
 }
 
-// Config contains all configured watches.
+// Config contains a map of all configured watch jobs indexed by watch name.
 type Config struct {
 	Watches map[string]WatchConfig
 }
 
-// ExpandPath expands ~ and environment variables in path strings.
+// ExpandPath expands home directory shortcuts (~/ and ~\) as well as environment variables ($VAR, %VAR%).
 func ExpandPath(path string) string {
 	if path == "" {
 		return ""
@@ -44,7 +59,7 @@ func ExpandPath(path string) string {
 	return filepath.Clean(path)
 }
 
-// LoadConfig reads and parses an INI configuration file.
+// LoadConfig reads and parses an INI configuration file containing [watch:<name>] sections.
 func LoadConfig(path string) (*Config, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -126,11 +141,13 @@ func LoadConfig(path string) (*Config, error) {
 	return &Config{Watches: watches}, nil
 }
 
+// parseBool parses string boolean values ("true", "yes", "1").
 func parseBool(val string) bool {
 	lower := strings.ToLower(val)
 	return lower == "true" || lower == "yes" || lower == "1"
 }
 
+// validateWatch ensures required WatchConfig parameters are populated.
 func validateWatch(w WatchConfig) error {
 	if w.Dir == "" {
 		return fmt.Errorf("watch '%s' missing required 'dir'", w.Name)
