@@ -120,4 +120,41 @@ func TestExpandPath(t *testing.T) {
 	if expandedWin != expected {
 		t.Errorf("ExpandPath(~\\Documents) = %q; want %q", expandedWin, expected)
 	}
+
+	t.Setenv("TEST_VAR", "my_folder")
+	expandedEnv := config.ExpandPath("%TEST_VAR%/sub")
+	expectedEnv := filepath.Clean("my_folder/sub")
+	if expandedEnv != expectedEnv {
+		t.Errorf("ExpandPath(%%TEST_VAR%%/sub) = %q; want %q", expandedEnv, expectedEnv)
+	}
+
+	// Undefined env var should remain unexpanded
+	expandedUnset := config.ExpandPath("%NONEXISTENT_VAR_999%/sub")
+	expectedUnset := filepath.Clean("%NONEXISTENT_VAR_999%/sub")
+	if expandedUnset != expectedUnset {
+		t.Errorf("ExpandPath(%%NONEXISTENT_VAR_999%%/sub) = %q; want %q", expandedUnset, expectedUnset)
+	}
+
+	// Self-referencing env var should expand in a single pass without infinite looping
+	t.Setenv("RECURSIVE_VAR", "%RECURSIVE_VAR%")
+	expandedRec := config.ExpandPath("%RECURSIVE_VAR%")
+	if expandedRec != "%RECURSIVE_VAR%" {
+		t.Errorf("ExpandPath(%%RECURSIVE_VAR%%) = %q; want %%RECURSIVE_VAR%%", expandedRec)
+	}
+
+	// Multiple env vars in path
+	t.Setenv("VAR_A", "path_a")
+	t.Setenv("VAR_B", "path_b")
+	expandedMulti := config.ExpandPath("%VAR_A%/%VAR_B%")
+	expectedMulti := filepath.Clean("path_a/path_b")
+	if expandedMulti != expectedMulti {
+		t.Errorf("ExpandPath(%%VAR_A%%/%%VAR_B%%) = %q; want %q", expandedMulti, expectedMulti)
+	}
+
+	// Unmatched % sign
+	expandedUnmatched := config.ExpandPath("100%_done")
+	expectedUnmatched := filepath.Clean("100%_done")
+	if expandedUnmatched != expectedUnmatched {
+		t.Errorf("ExpandPath(100%%_done) = %q; want %q", expandedUnmatched, expectedUnmatched)
+	}
 }

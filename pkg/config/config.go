@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -46,6 +47,9 @@ func ExpandPath(path string) string {
 		return ""
 	}
 	path = os.ExpandEnv(path)
+	if strings.Contains(path, "%") {
+		path = expandWinEnv(path)
+	}
 	if strings.HasPrefix(path, "~/") || strings.HasPrefix(path, "~\\") || path == "~" {
 		home, err := os.UserHomeDir()
 		if err == nil {
@@ -57,6 +61,18 @@ func ExpandPath(path string) string {
 		}
 	}
 	return filepath.Clean(path)
+}
+
+var winEnvRegex = regexp.MustCompile(`%([^%]+)%`)
+
+func expandWinEnv(path string) string {
+	return winEnvRegex.ReplaceAllStringFunc(path, func(match string) string {
+		varName := match[1 : len(match)-1]
+		if val := os.Getenv(varName); val != "" {
+			return val
+		}
+		return match
+	})
 }
 
 // LoadConfig reads and parses an INI configuration file containing [watch:<name>] sections.
