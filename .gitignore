@@ -1,0 +1,31 @@
+# Binaries and Executables
+/*.exe
+/*.exe.test
+/*.dll
+/*.so
+/*.dylib
+/file-watcher
+/file-watcher.exe
+
+# Test and Coverage Artifacts
+coverage
+coverage.out
+*.out
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# IDE and Editor Files
+.idea/
+.vscode/
+.vs/
+*.swp
+*.swo
+*~
+
+# Environment and Temporary Files
+*.tmp
+*.log

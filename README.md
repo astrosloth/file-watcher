@@ -1,73 +1,76 @@
-# File Watcher
+# File Watcher (Go Edition)
 
-A simple user-mode daemon (fish shell script) that watches a directory for files matching a pattern and automatically moves them to a destination.
+A high-performance, cross-platform daemon and CLI tool written in **Go** that watches directories for matching files and automatically processes or moves them to destination folders.
+
+Supports **Windows**, **Linux**, and **macOS**.
+
+---
 
 ## Features
 
-- Watch any directory for new files
-- Match files using glob patterns (e.g., `*.pdf`, `*.{jpg,png,gif}`, `report_*.csv`)
-- Automatically move matching files to a destination directory
-- Uses `inotifywait` for efficient watching (with polling fallback)
-- Handles duplicate filenames by appending a counter
-- Can run as a foreground process or daemon
-- Optional logging to file
+- **Cross-Platform**: Built with native Go system APIs (`fsnotify`), supporting Windows, macOS, and Linux out-of-the-box without requiring external tools.
+- **Event-Driven & Polling Fallback**: Uses OS file system events (`inotify` / ReadDirectoryChangesW / FSEvents) with configurable polling fallback mode.
+- **Brace Expansion Globbing**: Advanced pattern matching supporting brace expansion (e.g., `*.{jpg,jpeg,png,gif,webp}`).
+- **Single-File Archive Extraction**: Pure Go stream extraction for `.zip`, `.tar`, `.tar.gz`, `.tgz`, `.tar.bz2`, `.tbz`, `.tar.xz`, `.txz` archives containing a single matching file.
+- **Duplicate Filename Resolution**: Automatically appends counters (`file_1.pdf`, `file_2.pdf`) to avoid overwriting existing files.
+- **File Write Stabilization / Debouncing**: Built-in debouncer to prevent moving incomplete/partial writes (browser downloads, large file transfers).
+- **Structured Log Rotation (`log/slog`)**: Size-based automatic log file rotation.
+- **Multi-Watch INI Configuration**: Manage multiple directory watches in a single config file.
 
-## Requirements
+---
 
-- Fish shell (version 3.0+)
-- Optional: `inotify-tools` for efficient file system watching
+## Installation & Building
 
-```bash
-# Install inotify-tools (recommended)
-sudo apt install inotify-tools   # Debian/Ubuntu
-sudo dnf install inotify-tools   # Fedora
-sudo pacman -S inotify-tools     # Arch
+### Requirements
+- Go 1.22+
+
+### Build Binary
+```powershell
+go build -o file-watcher.exe ./cmd/file-watcher
 ```
+On Linux/macOS:
+```bash
+go build -o file-watcher ./cmd/file-watcher
+```
+
+---
 
 ## Usage
 
 ### Single Watch Mode
 
 ```bash
-./file-watcher.fish <watch_dir> <pattern> <dest_dir> [options]
+file-watcher <watch_dir> <pattern> <dest_dir> [options]
 ```
 
 ### Config File Mode (Multiple Watches)
 
 ```bash
-./file-watcher.fish --config <config_file> [options]
+file-watcher --config <config_file> [options]
 ```
 
-### Arguments (Single Watch Mode)
+### Command Line Options
 
-| Argument    | Description                                          |
-|-------------|------------------------------------------------------|
-| `watch_dir` | Directory to watch for new files                     |
-| `pattern`   | Glob pattern to match (e.g., `*.pdf`, `*.{jpg,png}`) |
-| `dest_dir`  | Destination directory for matched files              |
+| Option                  | Description                                                                     |
+|-------------------------|---------------------------------------------------------------------------------|
+| `--config <path>`       | Use config file for multiple watches                                           |
+| `--poll-interval <sec>` | Polling interval in seconds (default: 5)                                        |
+| `--use-polling`         | Force polling mode instead of event-driven fsnotify                            |
+| `--extract-archives`    | Extract matching file from single-file archives (.zip, .tar.gz, etc.)           |
+| `--daemon`              | Run in background mode (creates PID and log files)                              |
+| `--pid-file <path>`     | Write process PID to file                                                      |
+| `--log-file <path>`     | Write structured logs to file                                                   |
+| `--max-log-size <bytes>`| Max log size before size rotation (default: 1048576 = 1MB)                      |
+| `--help`, `-h`          | Show help message                                                               |
+| `--version`, `-v`       | Show version                                                                    |
 
-### Options
+---
 
-| Option                      | Description                                |
-|-----------------------------|--------------------------------------------|
-| `--config <path>`           | Use config file for multiple watches       |
-| `--poll-interval <sec>`     | Polling interval in seconds (default: 5)   |
-| `--use-polling`             | Force polling mode instead of inotify      |
-| `--daemon`                  | Run in background (daemonize)              |
-| `--pid-file <path>`         | Write PID to file (default in daemon mode: `~/.local/state/file-watcher/file-watcher.pid`) |
-| `--log-file <path>`         | Write logs to file (default in daemon mode: `~/.local/state/file-watcher/file-watcher.log`) |
-| `--max-log-size <bytes>`    | Max log file size before rotation (default: 1048576 = 1MB). Keeps one backup (.log.1) |
-| `--extract-archives`        | If archive contains only one file and it matches, extract it (supports zip, tar, tar.gz, tar.bz2, tar.xz) |
-| `--help`                    | Show help message                          |
-| `--version`                 | Show version                               |
+## Configuration File Format
 
-## Config File Format
-
-Create a config file with multiple `[watch:name]` sections:
+Create a configuration file (e.g. `file-watcher.conf`):
 
 ```ini
-# ~/.config/file-watcher/config
-
 [watch:pdfs]
 dir = ~/Downloads
 pattern = *.pdf
@@ -80,134 +83,63 @@ pattern = *.{jpg,jpeg,png,gif,webp}
 dest = ~/Pictures
 
 [watch:reports]
-dir = /tmp
+dir = C:/tmp
 pattern = report_*.csv
 dest = ~/Reports
 poll-interval = 10
 ```
 
-### Config Options Per Watch
-
-| Option              | Description                              |
-|---------------------|------------------------------------------|
-| `dir`               | Directory to watch (required)            |
-| `pattern`           | Glob pattern to match (required)         |
-| `dest`              | Destination directory (required)         |
-| `extract-archives`  | Extract from single-file archives (true/false) |
-| `poll-interval`     | Polling interval in seconds              |
-| `use-polling`       | Force polling mode (true/false)          |
+---
 
 ## Examples
 
-### Move PDFs from Downloads to Documents
-
+### Watch Downloads for PDFs and move to Documents
 ```bash
-./file-watcher.fish ~/Downloads "*.pdf" ~/Documents/PDFs
+file-watcher ~/Downloads "*.pdf" ~/Documents/PDFs
 ```
 
-### Move images to Pictures folder
-
+### Move Images with Brace Pattern
 ```bash
-./file-watcher.fish ~/Downloads "*.{jpg,jpeg,png,gif,webp}" ~/Pictures
+file-watcher ~/Downloads "*.{jpg,jpeg,png,gif}" ~/Pictures
 ```
 
-### Watch for CSV reports and run as daemon
-
+### Auto-Extract Single-File Archives
 ```bash
-# Simple - uses default pid/log files in ~/.local/state/file-watcher/
-./file-watcher.fish /tmp "report_*.csv" ~/Reports --daemon
-
-# With custom paths
-./file-watcher.fish /tmp "report_*.csv" ~/Reports \
-    --daemon \
-    --pid-file /tmp/file-watcher.pid \
-    --log-file ~/file-watcher.log
+file-watcher ~/Downloads "*.pdf" ~/Documents/PDFs --extract-archives
 ```
 
-### Force polling mode with 10-second interval
-
+### Multi-Watch Configuration
 ```bash
-./file-watcher.fish ~/Downloads "*.pdf" ~/Documents/PDFs \
-    --use-polling \
-    --poll-interval 10
+file-watcher --config file-watcher.conf
 ```
 
-### Extract PDFs from archives
+---
 
-If an archive (zip, tar.gz, etc.) contains only a single file and it matches the pattern, extract it:
+## Development & Quality Checks
 
-```bash
-./file-watcher.fish ~/Downloads "*.pdf" ~/Documents/PDFs --extract-archives
+Run full static analysis, code formatting check, unit tests with coverage report, and compile the binary:
+
+**Windows (PowerShell):**
+```powershell
+.\check.ps1
 ```
 
-### Run multiple watches with config file
-
+**Linux / macOS (Bash):**
 ```bash
-./file-watcher.fish --config ~/.config/file-watcher/config --daemon
+./check.sh
 ```
 
-## Stopping the Daemon
-
-If running in foreground: Press `Ctrl+C`
-
-If running as daemon:
-```bash
-kill $(cat ~/.local/state/file-watcher/file-watcher.pid)
+**Fish Shell:**
+```fish
+./check.fish
 ```
 
-## Autostart on Login (systemd)
-
-1. **Create and edit your config file**:
-   ```bash
-   mkdir -p ~/.config/file-watcher
-   cp file-watcher.conf ~/.config/file-watcher/config
-   vim ~/.config/file-watcher/config
-   ```
-
-2. **Install the service**:
-   ```bash
-   mkdir -p ~/.config/systemd/user
-   cp file-watcher.service ~/.config/systemd/user/
-   ```
-
-3. **Enable and start**:
-   ```bash
-   systemctl --user daemon-reload
-   systemctl --user enable file-watcher
-   systemctl --user start file-watcher
-   ```
-
-4. **Check status**:
-   ```bash
-   systemctl --user status file-watcher
-   ```
-
-5. **View logs**:
-   ```bash
-   journalctl --user -u file-watcher -f
-   ```
-
-To stop/disable:
+Or run standard Go tests directly:
 ```bash
-systemctl --user stop file-watcher
-systemctl --user disable file-watcher
+go test -v ./...
 ```
 
-To reload after config changes:
-```bash
-systemctl --user restart file-watcher
-```
-
-## How It Works
-
-1. **inotify mode** (default): Uses Linux's inotify subsystem via `inotifywait` to efficiently detect when files are created or moved into the watched directory. This is instant and uses minimal CPU.
-
-2. **Polling mode** (fallback): If `inotify-tools` is not installed, the script falls back to polling the directory at regular intervals.
-
-When a matching file is detected:
-- The script waits briefly (0.5s) to ensure the file is fully written
-- Moves the file to the destination directory
-- If a file with the same name exists, appends a counter (e.g., `file_1.pdf`, `file_2.pdf`)
+---
 
 ## License
 
