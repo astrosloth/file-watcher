@@ -1,6 +1,6 @@
 // Package main provides the command-line interface entry point for file-watcher,
 // supporting CLI arguments, multi-watch INI configuration files, daemon defaults,
-// and signal-based graceful shutdown.
+// service auto-installation, and signal-based graceful shutdown.
 package main
 
 import (
@@ -19,6 +19,7 @@ import (
 
 	"file-watcher/pkg/config"
 	"file-watcher/pkg/logger"
+	"file-watcher/pkg/service"
 	"file-watcher/pkg/watcher"
 )
 
@@ -29,9 +30,38 @@ func main() {
 	os.Exit(runMain())
 }
 
-// runMain parses command-line flags, initializes loggers and PID files, starts watch instances,
+// runMain parses command-line flags and subcommands, initializes loggers and PID files, starts watch instances,
 // and handles graceful shutdown upon receiving OS termination signals. Returns the exit status code.
 func runMain() int {
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "install":
+			installFlags := flag.NewFlagSet("install", flag.ExitOnError)
+			var cfgPath string
+			installFlags.StringVar(&cfgPath, "config", "", "Path to custom configuration file")
+			_ = installFlags.Parse(os.Args[2:])
+			if err := service.Install(cfgPath); err != nil {
+				fmt.Fprintf(os.Stderr, "ERROR: Service installation failed: %v\n", err)
+				return 1
+			}
+			return 0
+		case "uninstall":
+			if err := service.Uninstall(); err != nil {
+				fmt.Fprintf(os.Stderr, "ERROR: Service uninstallation failed: %v\n", err)
+				return 1
+			}
+			return 0
+		case "status":
+			st, err := service.Status()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "ERROR: Failed to retrieve status: %v\n", err)
+				return 1
+			}
+			fmt.Println(st)
+			return 0
+		}
+	}
+
 	var (
 		configFile      string
 		pollIntervalSec int
@@ -243,6 +273,11 @@ func printUsage() {
 	fmt.Printf("file-watcher v%s\n\n", version)
 	fmt.Println("Usage: file-watcher [options] <watch_dir> <pattern> <dest_dir>")
 	fmt.Println("       file-watcher [options] --config <config_file>")
+	fmt.Println("       file-watcher <command>")
+	fmt.Println("\nCommands:")
+	fmt.Println("  install [--config <path>]  Install autostart background task/service")
+	fmt.Println("  uninstall                  Remove autostart background task/service")
+	fmt.Println("  status                     Show autostart task/service status")
 	fmt.Println("\nArguments (single watch mode):")
 	fmt.Println("  watch_dir    Directory to watch for new files")
 	fmt.Println("  pattern      Glob pattern to match (e.g. '*.pdf', '*.{jpg,png}')")

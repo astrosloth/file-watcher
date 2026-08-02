@@ -1,0 +1,89 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build & Release Assets
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        include:
+          - os: windows
+            arch: amd64
+            ext: .exe
+            archive: zip
+          - os: windows
+            arch: arm64
+            ext: .exe
+            archive: zip
+          - os: linux
+            arch: amd64
+            ext: ""
+            archive: tar.gz
+          - os: linux
+            arch: arm64
+            ext: ""
+            archive: tar.gz
+          - os: darwin
+            arch: amd64
+            ext: ""
+            archive: tar.gz
+          - os: darwin
+            arch: arm64
+            ext: ""
+            archive: tar.gz
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Extract Tag Name
+        id: tag
+        run: echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+      - name: Build Binary
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p build_stage
+          go build -ldflags="-s -w" -o build_stage/file-watcher${{ matrix.ext }} ./cmd/file-watcher
+          cp file-watcher.conf build_stage/
+          cp README.md build_stage/
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            cp install.ps1 build_stage/
+          fi
+
+      - name: Create Release Archive (ZIP)
+        if: matrix.archive == 'zip'
+        run: |
+          cd build_stage
+          zip -r ../file-watcher-${{ env.TAG_NAME }}-${{ matrix.os }}-${{ matrix.arch }}.zip .
+
+      - name: Create Release Archive (TAR.GZ)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          cd build_stage
+          tar -czvf ../file-watcher-${{ env.TAG_NAME }}-${{ matrix.os }}-${{ matrix.arch }}.tar.gz .
+
+      - name: Publish Release Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            file-watcher-*.zip
+            file-watcher-*.tar.gz
+          generate_release_notes: true
