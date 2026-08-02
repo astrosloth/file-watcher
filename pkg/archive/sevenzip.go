@@ -2,7 +2,7 @@ package archive
 
 import (
 	"fmt"
-	"strings"
+	"io"
 
 	"github.com/bodgit/sevenzip"
 )
@@ -13,40 +13,16 @@ func inspectAndExtract7z(archivePath, targetPattern, destDir string) (bool, stri
 	if err != nil {
 		return false, "", fmt.Errorf("failed to open 7z: %w", err)
 	}
-	defer r.Close()
 
-	var targetFile *sevenzip.File
-	fileCount := 0
-
-	for _, f := range r.File {
-		fInfo := f.FileInfo()
-		if fInfo.IsDir() || strings.HasSuffix(f.Name, "/") || strings.HasSuffix(f.Name, "\\") {
-			continue
+	entries := make([]randomAccessEntry, len(r.File))
+	for i, f := range r.File {
+		f := f
+		entries[i] = randomAccessEntry{
+			Name:  f.Name,
+			IsDir: f.FileInfo().IsDir(),
+			Open:  func() (io.ReadCloser, error) { return f.Open() },
 		}
-		fileCount++
-		if fileCount > 1 {
-			return false, "", nil
-		}
-		targetFile = f
 	}
 
-	var singleEntryName string
-	if targetFile != nil {
-		singleEntryName = targetFile.Name
-	}
-
-	ok, baseName, err := matchSinglePayload(singleEntryName, fileCount, targetPattern)
-	if !ok || err != nil {
-		return ok, "", err
-	}
-
-	rc, err := targetFile.Open()
-	if err != nil {
-		return false, "", fmt.Errorf("failed to open 7z entry: %w", err)
-	}
-
-	destPath, err := extractStream(rc, baseName, destDir)
-	_ = rc.Close()
-
-	return finalizeExtraction(archivePath, destPath, err)
+	return inspectAndExtractRandomAccess(archivePath, targetPattern, destDir, entries, r.Close)
 }

@@ -90,7 +90,10 @@ func (rw *RotatingWriter) rotate() {
 
 	backup := rw.filePath + ".1"
 	_ = os.Remove(backup)
-	_ = os.Rename(rw.filePath, backup)
+	if err := os.Rename(rw.filePath, backup); err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: Log rotation failed: %v\n", err)
+		return
+	}
 	rw.currentLen = 0
 }
 

@@ -128,4 +128,3 @@ func Status() (string, error) {
 
 	return "User Autostart Configured (Stopped)", nil
 }
-

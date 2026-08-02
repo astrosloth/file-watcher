@@ -304,4 +304,42 @@ func TestCopyAndRemoveFailureCleanup(t *testing.T) {
 	if _, err := os.Stat(dst); !os.IsNotExist(err) {
 		t.Errorf("destination file should not exist after failed copy")
 	}
+	if _, err := os.Stat(dst + ".tmp"); !os.IsNotExist(err) {
+		t.Errorf("destination .tmp file should not exist after failed copy")
+	}
+}
+
+func TestCopyAndRemoveAtomicTmpCleanup(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "copy_atomic_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	src := filepath.Join(tmpDir, "source.dat")
+	dst := filepath.Join(tmpDir, "target.dat")
+
+	content := []byte("cifs resilience test payload data")
+	if err := os.WriteFile(src, content, 0644); err != nil {
+		t.Fatalf("failed to create source file: %v", err)
+	}
+
+	if err := copyAndRemove(src, dst); err != nil {
+		t.Fatalf("copyAndRemove failed: %v", err)
+	}
+
+	// Verify final file exists and matches payload
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("failed to read target file: %v", err)
+	}
+	if string(got) != string(content) {
+		t.Errorf("got %q, want %q", string(got), string(content))
+	}
+
+	// Verify .tmp staging file was removed upon atomic rename
+	tmpPath := dst + ".tmp"
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Errorf("staged .tmp file %s was not cleaned up after atomic rename", tmpPath)
+	}
 }

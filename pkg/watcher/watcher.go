@@ -87,6 +87,8 @@ func (w *Watcher) stopPendingTimers() {
 
 // processExistingFiles scans the watch directory for pre-existing files matching the pattern.
 func (w *Watcher) processExistingFiles(ctx context.Context) {
+	w.pruneFailures()
+
 	entries, err := os.ReadDir(w.opts.WatchDir)
 	if err != nil {
 		w.opts.Logger.Error("Failed to read watch dir for existing files", "error", err)
@@ -106,6 +108,17 @@ func (w *Watcher) processExistingFiles(ctx context.Context) {
 
 		path := filepath.Join(w.opts.WatchDir, entry.Name())
 		_ = w.handleFile(path)
+	}
+}
+
+func (w *Watcher) pruneFailures() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	now := time.Now()
+	for p, t := range w.failed {
+		if now.Sub(t) > 5*time.Minute {
+			delete(w.failed, p)
+		}
 	}
 }
 
@@ -283,30 +296,59 @@ func (w *Watcher) runPolling(ctx context.Context) error {
 }
 
 // copyAndRemove copies a file from src to dst and removes src upon success.
-// If the copy or file close operation fails, dst is removed to prevent partial files.
+// It uses a temporary .tmp extension on destination to ensure atomic file placement,
+// flushes write buffers via Sync(), and retries transient failures before removing src.
 func copyAndRemove(src, dst string) error {
+	info, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+
+	tmpDst := dst + ".tmp"
+	maxRetries := 3
+	var lastErr error
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		err = atomicCopyFile(src, tmpDst, dst, info.Mode())
+		if err == nil {
+			return os.Remove(src)
+		}
+		lastErr = err
+		_ = os.Remove(tmpDst)
+
+		if attempt < maxRetries {
+			time.Sleep(time.Duration(attempt*100) * time.Millisecond)
+		}
+	}
+
+	return fmt.Errorf("failed to copy file after %d attempts: %w", maxRetries, lastErr)
+}
+
+func atomicCopyFile(src, tmpDst, finalDst string, mode os.FileMode) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
 
-	out, err := os.Create(dst)
+	out, err := os.OpenFile(tmpDst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
 	if err != nil {
 		return err
 	}
 
 	if _, err := io.Copy(out, in); err != nil {
 		_ = out.Close()
-		_ = os.Remove(dst)
 		return err
 	}
 
-	_ = in.Close()
+	if err := out.Sync(); err != nil {
+		_ = out.Close()
+		return err
+	}
+
 	if err := out.Close(); err != nil {
-		_ = os.Remove(dst)
 		return err
 	}
 
-	return os.Remove(src)
+	return os.Rename(tmpDst, finalDst)
 }

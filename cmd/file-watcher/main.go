@@ -159,64 +159,78 @@ func runMain() int {
 	defer cancel()
 
 	pollInterval := time.Duration(pollIntervalSec) * time.Second
+	_ = pollInterval
+
+	var cfg *config.Config
+	var expandedConfig string
 
 	if configFile != "" {
-		expandedConfig := config.ExpandPath(configFile)
-		cfg, err := config.LoadConfig(expandedConfig)
+		expandedConfig = config.ExpandPath(configFile)
+		var err error
+		cfg, err = config.LoadConfig(expandedConfig)
 		if err != nil {
 			appLogger.Error("Failed to load config file", "path", expandedConfig, "error", err)
 			return 1
 		}
-
-		startWatches := func(parentCtx context.Context, c *config.Config) (context.CancelFunc, *sync.WaitGroup) {
-			watchCtx, cancelFn := context.WithCancel(parentCtx)
-			var wg sync.WaitGroup
-
-			appLogger.Info("Starting file-watcher with multi-watch config", "count", len(c.Watches), "config", expandedConfig)
-
-			for _, wCfg := range c.Watches {
-				intval := time.Duration(wCfg.PollInterval) * time.Second
-				if isFlagPassed("poll-interval") {
-					intval = pollInterval
-				}
-				isPoll := wCfg.UsePolling
-				if isFlagPassed("use-polling") {
-					isPoll = usePolling
-				}
-				isExtract := wCfg.ExtractArchives
-				if isFlagPassed("extract-archives") {
-					isExtract = extractArchives
-				}
-
-				w, err := watcher.New(watcher.Options{
-					WatchDir:        wCfg.Dir,
-					Pattern:         wCfg.Pattern,
-					DestDir:         wCfg.Dest,
-					ExtractArchives: isExtract,
-					PollInterval:    intval,
-					UsePolling:      isPoll,
-					Logger:          appLogger.With("watch", wCfg.Name),
-				})
-				if err != nil {
-					appLogger.Error("Failed to create watch", "watch", wCfg.Name, "error", err)
-					continue
-				}
-
-				wg.Add(1)
-				go func(w *watcher.Watcher, name string) {
-					defer wg.Done()
-					if err := w.Start(watchCtx); err != nil && err != context.Canceled {
-						appLogger.Error("Watcher stopped with error", "watch", name, "error", err)
-					}
-				}(w, wCfg.Name)
-			}
-			return cancelFn, &wg
+	} else {
+		args := flag.Args()
+		if len(args) < 3 {
+			printUsage()
+			return 1
 		}
+		cfg = &config.Config{
+			Watches: map[string]config.WatchConfig{
+				"default": {
+					Name:            "default",
+					Dir:             config.ExpandPath(args[0]),
+					Pattern:         args[1],
+					Dest:            config.ExpandPath(args[2]),
+					ExtractArchives: extractArchives,
+					PollInterval:    pollIntervalSec,
+					UsePolling:      usePolling,
+				},
+			},
+		}
+	}
 
-		var mu sync.Mutex
-		cancelCurrent, currentWg := startWatches(ctx, cfg)
+	applyFlagOverrides(cfg, pollIntervalSec, usePolling, extractArchives)
 
-		// Set up fsnotify watcher for live config file hot-reloading
+	startWatches := func(parentCtx context.Context, c *config.Config) (context.CancelFunc, *sync.WaitGroup) {
+		watchCtx, cancelFn := context.WithCancel(parentCtx)
+		var wg sync.WaitGroup
+
+		appLogger.Info("Starting file-watcher", "count", len(c.Watches))
+
+		for _, wCfg := range c.Watches {
+			w, err := watcher.New(watcher.Options{
+				WatchDir:        wCfg.Dir,
+				Pattern:         wCfg.Pattern,
+				DestDir:         wCfg.Dest,
+				ExtractArchives: wCfg.ExtractArchives,
+				PollInterval:    time.Duration(wCfg.PollInterval) * time.Second,
+				UsePolling:      wCfg.UsePolling,
+				Logger:          appLogger.With("watch", wCfg.Name),
+			})
+			if err != nil {
+				appLogger.Error("Failed to create watch", "watch", wCfg.Name, "error", err)
+				continue
+			}
+
+			wg.Add(1)
+			go func(w *watcher.Watcher, name string) {
+				defer wg.Done()
+				if err := w.Start(watchCtx); err != nil && err != context.Canceled {
+					appLogger.Error("Watcher stopped with error", "watch", name, "error", err)
+				}
+			}(w, wCfg.Name)
+		}
+		return cancelFn, &wg
+	}
+
+	var mu sync.Mutex
+	cancelCurrent, currentWg := startWatches(ctx, cfg)
+
+	if expandedConfig != "" {
 		cfgWatcher, err := fsnotify.NewWatcher()
 		if err != nil {
 			appLogger.Warn("Failed to create config file watcher, hot-reloading disabled", "error", err)
@@ -252,10 +266,18 @@ func runMain() int {
 										return
 									}
 
+									applyFlagOverrides(newCfg, pollIntervalSec, usePolling, extractArchives)
+
 									appLogger.Info("Configuration reloaded successfully. Updating watch jobs...")
 									mu.Lock()
-									cancelCurrent()
-									currentWg.Wait()
+									oldCancel := cancelCurrent
+									oldWg := currentWg
+									mu.Unlock()
+
+									oldCancel()
+									oldWg.Wait()
+
+									mu.Lock()
 									cancelCurrent, currentWg = startWatches(ctx, newCfg)
 									mu.Unlock()
 								})
@@ -270,58 +292,36 @@ func runMain() int {
 				}()
 			}
 		}
-
-		appLogger.Info("file-watcher process running. Press Ctrl+C to stop.")
-		<-ctx.Done()
-		appLogger.Info("Shutting down file-watcher gracefully...")
-		mu.Lock()
-		cancelCurrent()
-		currentWg.Wait()
-		mu.Unlock()
-		appLogger.Info("Shutdown complete.")
-		return 0
 	}
-
-	// Single watch mode
-	args := flag.Args()
-	if len(args) < 3 {
-		printUsage()
-		return 1
-	}
-
-	watchDir := config.ExpandPath(args[0])
-	pattern := args[1]
-	destDir := config.ExpandPath(args[2])
-
-	w, err := watcher.New(watcher.Options{
-		WatchDir:        watchDir,
-		Pattern:         pattern,
-		DestDir:         destDir,
-		ExtractArchives: extractArchives,
-		PollInterval:    pollInterval,
-		UsePolling:      usePolling,
-		Logger:          appLogger,
-	})
-	if err != nil {
-		appLogger.Error("Failed to initialize watcher", "error", err)
-		return 1
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		if err := w.Start(ctx); err != nil && err != context.Canceled {
-			appLogger.Error("Watcher stopped with error", "error", err)
-		}
-	}()
 
 	appLogger.Info("file-watcher process running. Press Ctrl+C to stop.")
 	<-ctx.Done()
 	appLogger.Info("Shutting down file-watcher gracefully...")
-	wg.Wait()
+	mu.Lock()
+	cancelCurrent()
+	currentWg.Wait()
+	mu.Unlock()
 	appLogger.Info("Shutdown complete.")
 	return 0
+}
+
+// applyFlagOverrides applies explicit CLI flag overrides to watch configurations.
+func applyFlagOverrides(cfg *config.Config, pollIntervalSec int, usePolling, extractArchives bool) {
+	if !isFlagPassed("poll-interval") && !isFlagPassed("use-polling") && !isFlagPassed("extract-archives") {
+		return
+	}
+	for name, wCfg := range cfg.Watches {
+		if isFlagPassed("poll-interval") {
+			wCfg.PollInterval = pollIntervalSec
+		}
+		if isFlagPassed("use-polling") {
+			wCfg.UsePolling = usePolling
+		}
+		if isFlagPassed("extract-archives") {
+			wCfg.ExtractArchives = extractArchives
+		}
+		cfg.Watches[name] = wCfg
+	}
 }
 
 // isFlagPassed checks if a specific flag name was explicitly passed in command-line arguments.

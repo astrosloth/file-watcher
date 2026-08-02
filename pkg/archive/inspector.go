@@ -31,6 +31,9 @@ func IsSupported(path string) bool {
 // If matched, it streams the file to destDir (resolving duplicate filenames) and deletes the original archive file.
 // Returns a boolean indicating whether extraction took place, the final extracted file path, and any error encountered.
 func InspectAndExtractSingleFile(archivePath, targetPattern, destDir string) (bool, string, error) {
+	if !IsSupported(archivePath) {
+		return false, "", nil
+	}
 	lower := strings.ToLower(archivePath)
 	if strings.HasSuffix(lower, ".zip") {
 		return inspectAndExtractZip(archivePath, targetPattern, destDir)
@@ -64,6 +67,63 @@ func finalizeExtraction(archivePath, destPath string, err error) (bool, string, 
 	}
 	_ = os.Remove(archivePath)
 	return true, destPath, nil
+}
+
+type randomAccessEntry struct {
+	Name  string
+	IsDir bool
+	Open  func() (io.ReadCloser, error)
+}
+
+// inspectAndExtractRandomAccess handles streaming inspection and extraction for random-access archives (.zip, .7z).
+func inspectAndExtractRandomAccess(archivePath, targetPattern, destDir string, entries []randomAccessEntry, closeArchive func() error) (bool, string, error) {
+	var targetEntry *randomAccessEntry
+	fileCount := 0
+
+	for i := range entries {
+		e := &entries[i]
+		if e.IsDir || strings.HasSuffix(e.Name, "/") || strings.HasSuffix(e.Name, "\\") {
+			continue
+		}
+		fileCount++
+		if fileCount > 1 {
+			if closeArchive != nil {
+				_ = closeArchive()
+			}
+			return false, "", nil
+		}
+		targetEntry = e
+	}
+
+	var singleEntryName string
+	if targetEntry != nil {
+		singleEntryName = targetEntry.Name
+	}
+
+	ok, baseName, err := matchSinglePayload(singleEntryName, fileCount, targetPattern)
+	if !ok || err != nil {
+		if closeArchive != nil {
+			_ = closeArchive()
+		}
+		return ok, "", err
+	}
+
+	rc, err := targetEntry.Open()
+	if err != nil {
+		if closeArchive != nil {
+			_ = closeArchive()
+		}
+		return false, "", fmt.Errorf("failed to open archive entry: %w", err)
+	}
+
+	destPath, err := extractStream(rc, baseName, destDir)
+	_ = rc.Close()
+
+	if closeArchive != nil {
+		_ = closeArchive()
+	}
+
+	return finalizeExtraction(archivePath, destPath, err)
 }
 
 type entryItem struct {
