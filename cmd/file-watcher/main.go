@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -70,7 +71,7 @@ func runMain() int {
 		return 0
 	}
 
-	// Daemon mode defaults for PID and log files
+	// Daemon mode background process detachment & default configuration
 	if daemon {
 		stateDir := config.ExpandPath("~/.local/state/file-watcher")
 		if pidFile == "" {
@@ -80,6 +81,21 @@ func runMain() int {
 		if logFile == "" {
 			_ = os.MkdirAll(stateDir, 0755)
 			logFile = filepath.Join(stateDir, "file-watcher.log")
+		}
+
+		if os.Getenv("FILE_WATCHER_DAEMON_CHILD") != "1" {
+			cmd := exec.Command(os.Args[0], os.Args[1:]...)
+			cmd.Env = append(os.Environ(), "FILE_WATCHER_DAEMON_CHILD=1")
+
+			if err := cmd.Start(); err != nil {
+				fmt.Fprintf(os.Stderr, "ERROR: Failed to start daemon process: %v\n", err)
+				return 1
+			}
+
+			fmt.Printf("Daemon started with PID: %d\n", cmd.Process.Pid)
+			fmt.Printf("  PID file: %s\n", pidFile)
+			fmt.Printf("  Log file: %s\n", logFile)
+			return 0
 		}
 	}
 

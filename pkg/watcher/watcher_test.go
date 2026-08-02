@@ -200,6 +200,60 @@ func TestWatcherArchiveExtraction(t *testing.T) {
 	}
 }
 
+func TestWatcherArchiveFallbackMove(t *testing.T) {
+	watchDir, err := os.MkdirTemp("", "watch_archive_fallback_*")
+	if err != nil {
+		t.Fatalf("failed to create watch dir: %v", err)
+	}
+	defer os.RemoveAll(watchDir)
+
+	destDir, err := os.MkdirTemp("", "dest_archive_fallback_*")
+	if err != nil {
+		t.Fatalf("failed to create dest dir: %v", err)
+	}
+	defer os.RemoveAll(destDir)
+
+	// Create a zip file containing MULTIPLE files so it won't be extracted
+	zipPath := createZipFile(t, watchDir, "archive.zip", map[string]string{
+		"file1.txt": "content 1",
+		"file2.txt": "content 2",
+	})
+
+	l := logger.NewConsoleLogger(nil)
+	w, err := New(Options{
+		WatchDir:        watchDir,
+		Pattern:         "*.zip",
+		DestDir:         destDir,
+		ExtractArchives: true,
+		PollInterval:    100 * time.Millisecond,
+		UsePolling:      true,
+		Logger:          l,
+	})
+	if err != nil {
+		t.Fatalf("failed to create watcher: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		_ = w.Start(ctx)
+	}()
+
+	time.Sleep(300 * time.Millisecond)
+
+	// Because archive contained 2 files, single-file extraction did not occur,
+	// but because pattern "*.zip" matched "archive.zip", archive.zip should be moved to destDir.
+	movedZip := filepath.Join(destDir, "archive.zip")
+	if _, err := os.Stat(movedZip); os.IsNotExist(err) {
+		t.Errorf("archive.zip was not moved to destination on fallback: %s", movedZip)
+	}
+
+	if _, err := os.Stat(zipPath); !os.IsNotExist(err) {
+		t.Errorf("original archive should no longer exist in watchDir: %s", zipPath)
+	}
+}
+
 func TestCopyAndRemove(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "copy_test_*")
 	if err != nil {

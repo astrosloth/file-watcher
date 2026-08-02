@@ -18,9 +18,11 @@ import (
 // Watcher monitors a specified directory for new or updated files, matching them
 // against a pattern and moving or extracting them to a destination directory.
 type Watcher struct {
-	opts    Options
-	mu      sync.Mutex
-	pending map[string]*time.Timer
+	opts       Options
+	mu         sync.Mutex
+	pending    map[string]*time.Timer
+	processing map[string]bool
+	failed     map[string]time.Time
 }
 
 // New initializes and validates a new Watcher instance with default fallback settings for missing options.
@@ -42,8 +44,10 @@ func New(opts Options) (*Watcher, error) {
 	}
 
 	return &Watcher{
-		opts:    opts,
-		pending: make(map[string]*time.Timer),
+		opts:       opts,
+		pending:    make(map[string]*time.Timer),
+		processing: make(map[string]bool),
+		failed:     make(map[string]time.Time),
 	}, nil
 }
 
@@ -109,7 +113,22 @@ func (w *Watcher) processExistingFiles(ctx context.Context) {
 // filename collision resolution, and moving the file to the destination directory.
 func (w *Watcher) handleFile(path string) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	if w.processing[path] {
+		w.mu.Unlock()
+		return nil
+	}
+	if lastErrTime, failedBefore := w.failed[path]; failedBefore && time.Since(lastErrTime) < 30*time.Second {
+		w.mu.Unlock()
+		return nil
+	}
+	w.processing[path] = true
+	w.mu.Unlock()
+
+	defer func() {
+		w.mu.Lock()
+		delete(w.processing, path)
+		w.mu.Unlock()
+	}()
 
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil
@@ -128,13 +147,15 @@ func (w *Watcher) handleFile(path string) error {
 		extracted, destPath, err := archive.InspectAndExtractSingleFile(path, w.opts.Pattern, w.opts.DestDir)
 		if err != nil {
 			w.opts.Logger.Error("Failed processing archive", "archive", baseName, "error", err)
+			w.recordFailure(path)
 			return err
 		}
 		if extracted {
 			w.opts.Logger.Info("Extracted single archive file", "archive", baseName, "dest", destPath)
+			w.clearFailure(path)
 			return nil
 		}
-		return nil
+		// If archive was not extracted, fall through to check if the archive itself matches pattern
 	}
 
 	// 2. Skip non-matching files
@@ -151,6 +172,7 @@ func (w *Watcher) handleFile(path string) error {
 	destPath := filepath.Join(w.opts.DestDir, targetName)
 
 	if err := os.MkdirAll(w.opts.DestDir, 0755); err != nil {
+		w.recordFailure(path)
 		return fmt.Errorf("failed to create destination directory: %w", err)
 	}
 
@@ -158,12 +180,26 @@ func (w *Watcher) handleFile(path string) error {
 	if err := os.Rename(path, destPath); err != nil {
 		if err := copyAndRemove(path, destPath); err != nil {
 			w.opts.Logger.Error("Failed to move file", "source", path, "dest", destPath, "error", err)
+			w.recordFailure(path)
 			return err
 		}
 	}
 
+	w.clearFailure(path)
 	w.opts.Logger.Info("Moved file", "file", baseName, "dest", destPath)
 	return nil
+}
+
+func (w *Watcher) recordFailure(path string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.failed[path] = time.Now()
+}
+
+func (w *Watcher) clearFailure(path string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	delete(w.failed, path)
 }
 
 // runFSNotify runs the event-driven watcher loop using operating system inotify/fsnotify events.
