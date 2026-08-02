@@ -145,12 +145,21 @@ func TestInspectAndExtractSingleFile(t *testing.T) {
 		}
 		defer os.RemoveAll(destDir)
 
+		// Create existing file in destDir to trigger duplicate name resolution
+		if err := os.WriteFile(filepath.Join(destDir, "document.pdf"), []byte("existing"), 0644); err != nil {
+			t.Fatalf("failed to write existing file: %v", err)
+		}
+
 		extracted, destFile, err := archive.InspectAndExtractSingleFile(zipPath, "*.pdf", destDir)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if !extracted {
 			t.Fatalf("expected extracted to be true")
+		}
+
+		if filepath.Base(destFile) != "document_1.pdf" {
+			t.Errorf("destFile basename = %q; want %q", filepath.Base(destFile), "document_1.pdf")
 		}
 
 		content, err := os.ReadFile(destFile)
@@ -243,8 +252,7 @@ func TestInspectAndExtractSingleFile(t *testing.T) {
 	})
 
 	t.Run("tar.bz2 reading test", func(t *testing.T) {
-		// Verify bzip2 package import usage
-		buf := bytes.NewBuffer([]byte{0x42, 0x5a, 0x68}) // BZh header
+		buf := bytes.NewBuffer([]byte{0x42, 0x5a, 0x68})
 		bzr := bzip2.NewReader(buf)
 		if bzr == nil {
 			t.Fatalf("bzip2 reader nil")

@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"file-watcher/pkg/namer"
 	"file-watcher/pkg/pattern"
 	"github.com/ulikunitz/xz"
 )
@@ -72,8 +71,8 @@ func InspectAndExtractSingleFile(archivePath, targetPattern, destDir string) (bo
 	}
 	defer reader.Close()
 
-	// Resolve destination file path
-	targetName := namer.ResolveTarget(baseName, func(name string) bool {
+	// Resolve destination file path using pattern package helper
+	targetName := pattern.ResolveTarget(baseName, func(name string) bool {
 		_, err := os.Stat(filepath.Join(destDir, name))
 		return err == nil
 	})
@@ -95,13 +94,10 @@ func InspectAndExtractSingleFile(archivePath, targetPattern, destDir string) (bo
 		return false, "", fmt.Errorf("failed to copy content: %w", err)
 	}
 
-	// Close outfile before removing archive
 	_ = outFile.Close()
 
 	// Remove original archive file
-	if err := os.Remove(archivePath); err != nil {
-		// Log warning or return error if remove fails
-	}
+	_ = os.Remove(archivePath)
 
 	return true, destPath, nil
 }
@@ -135,8 +131,7 @@ func listZipEntries(archivePath string) ([]ArchiveEntry, error) {
 			},
 		})
 	}
-	// Note: We close Zip reader after reading entries, so for Zip we buffer entry bytes or re-open
-	// To be safe for zip reader lifetime:
+
 	var buffered []ArchiveEntry
 	for _, e := range entries {
 		rc, err := e.Open()
@@ -206,7 +201,6 @@ func listTarEntries(archivePath string) ([]ArchiveEntry, error) {
 			continue
 		}
 
-		// Read content into memory for single file
 		var buf bytes.Buffer
 		if _, err := io.Copy(&buf, tr); err != nil {
 			return nil, err

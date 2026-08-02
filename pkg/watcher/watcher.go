@@ -3,20 +3,19 @@ package watcher
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
-	"file-watcher/pkg/pipeline"
+	"file-watcher/pkg/archive"
+	"file-watcher/pkg/pattern"
 	"github.com/fsnotify/fsnotify"
 )
 
 type Watcher struct {
-	opts      Options
-	processor pipeline.Processor
-	seen      sync.Map
+	opts Options
 }
 
 // New creates a new Watcher instance with the specified Options struct.
@@ -37,21 +36,10 @@ func New(opts Options) (*Watcher, error) {
 		opts.Logger = slog.Default()
 	}
 
-	proc := pipeline.BuildPipeline(
-		opts.DestDir,
-		opts.Pattern,
-		opts.ExtractArchives,
-		opts.Logger,
-	)
-
-	return &Watcher{
-		opts:      opts,
-		processor: proc,
-	}, nil
+	return &Watcher{opts: opts}, nil
 }
 
 func (w *Watcher) Start(ctx context.Context) error {
-	// Create destination directory if missing
 	if w.opts.DestDir != "" {
 		if err := os.MkdirAll(w.opts.DestDir, 0755); err != nil {
 			return fmt.Errorf("failed to create destination directory: %w", err)
@@ -65,7 +53,6 @@ func (w *Watcher) Start(ctx context.Context) error {
 		"use_polling", w.opts.UsePolling,
 	)
 
-	// Process existing files first
 	w.processExistingFiles(ctx)
 
 	if w.opts.UsePolling {
@@ -93,19 +80,64 @@ func (w *Watcher) processExistingFiles(ctx context.Context) {
 		}
 
 		path := filepath.Join(w.opts.WatchDir, entry.Name())
-		fi, err := entry.Info()
-		if err != nil {
-			continue
-		}
-
-		ev := pipeline.Event{
-			Path:     path,
-			Basename: entry.Name(),
-			FileInfo: fi,
-		}
-
-		_ = w.processor(ctx, ev)
+		_ = w.handleFile(path)
 	}
+}
+
+func (w *Watcher) handleFile(path string) error {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return nil
+	}
+
+	baseName := filepath.Base(path)
+
+	// Check pattern match
+	matched, err := pattern.Match(w.opts.Pattern, baseName)
+	if err != nil {
+		return err
+	}
+
+	// 1. Single-file archive extraction
+	if w.opts.ExtractArchives && archive.IsArchive(path) {
+		extracted, destPath, err := archive.InspectAndExtractSingleFile(path, w.opts.Pattern, w.opts.DestDir)
+		if err != nil {
+			w.opts.Logger.Error("Failed processing archive", "archive", baseName, "error", err)
+			return err
+		}
+		if extracted {
+			w.opts.Logger.Info("Extracted single archive file", "archive", baseName, "dest", destPath)
+			return nil
+		}
+		return nil
+	}
+
+	// 2. Skip non-matching files
+	if !matched {
+		return nil
+	}
+
+	// 3. Resolve target duplicate filename using pattern package helper
+	targetName := pattern.ResolveTarget(baseName, func(name string) bool {
+		_, err := os.Stat(filepath.Join(w.opts.DestDir, name))
+		return err == nil
+	})
+
+	destPath := filepath.Join(w.opts.DestDir, targetName)
+
+	if err := os.MkdirAll(w.opts.DestDir, 0755); err != nil {
+		return fmt.Errorf("failed to create destination directory: %w", err)
+	}
+
+	// 4. Move file to destination
+	if err := os.Rename(path, destPath); err != nil {
+		if err := copyAndRemove(path, destPath); err != nil {
+			w.opts.Logger.Error("Failed to move file", "source", path, "dest", destPath, "error", err)
+			return err
+		}
+	}
+
+	w.opts.Logger.Info("Moved file", "file", baseName, "dest", destPath)
+	return nil
 }
 
 func (w *Watcher) runFSNotify(ctx context.Context) error {
@@ -137,26 +169,18 @@ func (w *Watcher) runFSNotify(ctx context.Context) error {
 					continue
 				}
 
-				baseName := filepath.Base(event.Name)
-				ev := pipeline.Event{
-					Path:     event.Name,
-					Basename: baseName,
-					FileInfo: fi,
-				}
-
-				// Debounce to allow write to stabilize
-				go func(ev pipeline.Event) {
+				targetPath := event.Name
+				go func(p string) {
 					select {
 					case <-ctx.Done():
 						return
 					case <-time.After(w.opts.DebounceDelay):
 					}
 
-					// Verify file still exists after debounce
-					if _, err := os.Stat(ev.Path); err == nil {
-						_ = w.processor(ctx, ev)
+					if _, err := os.Stat(p); err == nil {
+						_ = w.handleFile(p)
 					}
-				}(ev)
+				}(targetPath)
 			}
 		case err, ok := <-fsWatcher.Errors:
 			if !ok {
@@ -181,4 +205,27 @@ func (w *Watcher) runPolling(ctx context.Context) error {
 			w.processExistingFiles(ctx)
 		}
 	}
+}
+
+func copyAndRemove(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+
+	_ = in.Close()
+	_ = out.Close()
+
+	return os.Remove(src)
 }
