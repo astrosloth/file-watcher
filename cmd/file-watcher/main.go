@@ -1,6 +1,6 @@
 // Package main provides the command-line interface entry point for file-watcher,
-// supporting CLI arguments, multi-watch INI configuration files, daemon defaults,
-// service auto-installation, and signal-based graceful shutdown.
+// supporting CLI arguments, multi-watch INI configuration files with live hot-reloading,
+// daemon defaults, service auto-installation, and signal-based graceful shutdown.
 package main
 
 import (
@@ -21,6 +21,8 @@ import (
 	"file-watcher/pkg/logger"
 	"file-watcher/pkg/service"
 	"file-watcher/pkg/watcher"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 const version = "1.0.0"
@@ -31,7 +33,7 @@ func main() {
 }
 
 // runMain parses command-line flags and subcommands, initializes loggers and PID files, starts watch instances,
-// and handles graceful shutdown upon receiving OS termination signals. Returns the exit status code.
+// monitors configuration files for hot-reloading, and handles graceful shutdown upon receiving OS termination signals.
 func runMain() int {
 	if len(os.Args) >= 2 {
 		switch os.Args[1] {
@@ -158,8 +160,6 @@ func runMain() int {
 
 	pollInterval := time.Duration(pollIntervalSec) * time.Second
 
-	var wg sync.WaitGroup
-
 	if configFile != "" {
 		expandedConfig := config.ExpandPath(configFile)
 		cfg, err := config.LoadConfig(expandedConfig)
@@ -168,77 +168,153 @@ func runMain() int {
 			return 1
 		}
 
-		appLogger.Info("Starting file-watcher with multi-watch config", "count", len(cfg.Watches), "config", expandedConfig)
+		startWatches := func(parentCtx context.Context, c *config.Config) (context.CancelFunc, *sync.WaitGroup) {
+			watchCtx, cancelFn := context.WithCancel(parentCtx)
+			var wg sync.WaitGroup
 
-		for _, wCfg := range cfg.Watches {
-			intval := time.Duration(wCfg.PollInterval) * time.Second
-			if isFlagPassed("poll-interval") {
-				intval = pollInterval
-			}
-			isPoll := wCfg.UsePolling
-			if isFlagPassed("use-polling") {
-				isPoll = usePolling
-			}
-			isExtract := wCfg.ExtractArchives
-			if isFlagPassed("extract-archives") {
-				isExtract = extractArchives
-			}
+			appLogger.Info("Starting file-watcher with multi-watch config", "count", len(c.Watches), "config", expandedConfig)
 
-			w, err := watcher.New(watcher.Options{
-				WatchDir:        wCfg.Dir,
-				Pattern:         wCfg.Pattern,
-				DestDir:         wCfg.Dest,
-				ExtractArchives: isExtract,
-				PollInterval:    intval,
-				UsePolling:      isPoll,
-				Logger:          appLogger.With("watch", wCfg.Name),
-			})
-			if err != nil {
-				appLogger.Error("Failed to create watch", "watch", wCfg.Name, "error", err)
-				continue
-			}
-
-			wg.Add(1)
-			go func(w *watcher.Watcher, name string) {
-				defer wg.Done()
-				if err := w.Start(ctx); err != nil && err != context.Canceled {
-					appLogger.Error("Watcher stopped with error", "watch", name, "error", err)
+			for _, wCfg := range c.Watches {
+				intval := time.Duration(wCfg.PollInterval) * time.Second
+				if isFlagPassed("poll-interval") {
+					intval = pollInterval
 				}
-			}(w, wCfg.Name)
-		}
-	} else {
-		args := flag.Args()
-		if len(args) < 3 {
-			printUsage()
-			return 1
-		}
+				isPoll := wCfg.UsePolling
+				if isFlagPassed("use-polling") {
+					isPoll = usePolling
+				}
+				isExtract := wCfg.ExtractArchives
+				if isFlagPassed("extract-archives") {
+					isExtract = extractArchives
+				}
 
-		watchDir := config.ExpandPath(args[0])
-		pattern := args[1]
-		destDir := config.ExpandPath(args[2])
+				w, err := watcher.New(watcher.Options{
+					WatchDir:        wCfg.Dir,
+					Pattern:         wCfg.Pattern,
+					DestDir:         wCfg.Dest,
+					ExtractArchives: isExtract,
+					PollInterval:    intval,
+					UsePolling:      isPoll,
+					Logger:          appLogger.With("watch", wCfg.Name),
+				})
+				if err != nil {
+					appLogger.Error("Failed to create watch", "watch", wCfg.Name, "error", err)
+					continue
+				}
 
-		w, err := watcher.New(watcher.Options{
-			WatchDir:        watchDir,
-			Pattern:         pattern,
-			DestDir:         destDir,
-			ExtractArchives: extractArchives,
-			PollInterval:    pollInterval,
-			UsePolling:      usePolling,
-			Logger:          appLogger,
-		})
-		if err != nil {
-			appLogger.Error("Failed to initialize watcher", "error", err)
-			return 1
-		}
-
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := w.Start(ctx); err != nil && err != context.Canceled {
-				appLogger.Error("Watcher stopped with error", "error", err)
+				wg.Add(1)
+				go func(w *watcher.Watcher, name string) {
+					defer wg.Done()
+					if err := w.Start(watchCtx); err != nil && err != context.Canceled {
+						appLogger.Error("Watcher stopped with error", "watch", name, "error", err)
+					}
+				}(w, wCfg.Name)
 			}
-		}()
+			return cancelFn, &wg
+		}
+
+		var mu sync.Mutex
+		cancelCurrent, currentWg := startWatches(ctx, cfg)
+
+		// Set up fsnotify watcher for live config file hot-reloading
+		cfgWatcher, err := fsnotify.NewWatcher()
+		if err != nil {
+			appLogger.Warn("Failed to create config file watcher, hot-reloading disabled", "error", err)
+		} else {
+			defer cfgWatcher.Close()
+			if err := cfgWatcher.Add(expandedConfig); err != nil {
+				appLogger.Warn("Failed to watch config file for changes", "path", expandedConfig, "error", err)
+			} else {
+				appLogger.Info("Config file hot-reloading active", "path", expandedConfig)
+
+				go func() {
+					var debounceTimer *time.Timer
+					for {
+						select {
+						case <-ctx.Done():
+							return
+						case event, ok := <-cfgWatcher.Events:
+							if !ok {
+								return
+							}
+							if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) || event.Has(fsnotify.Rename) {
+								if event.Has(fsnotify.Create) || event.Has(fsnotify.Rename) {
+									_ = cfgWatcher.Add(expandedConfig)
+								}
+								if debounceTimer != nil {
+									debounceTimer.Stop()
+								}
+								debounceTimer = time.AfterFunc(500*time.Millisecond, func() {
+									appLogger.Info("Config file modification detected, validating...", "path", expandedConfig)
+									newCfg, err := config.LoadConfig(expandedConfig)
+									if err != nil {
+										appLogger.Error("Failed to reload config file (keeping existing configuration active)", "error", err)
+										return
+									}
+
+									appLogger.Info("Configuration reloaded successfully. Updating watch jobs...")
+									mu.Lock()
+									cancelCurrent()
+									currentWg.Wait()
+									cancelCurrent, currentWg = startWatches(ctx, newCfg)
+									mu.Unlock()
+								})
+							}
+						case err, ok := <-cfgWatcher.Errors:
+							if !ok {
+								return
+							}
+							appLogger.Error("Config file watcher error", "error", err)
+						}
+					}
+				}()
+			}
+		}
+
+		appLogger.Info("file-watcher process running. Press Ctrl+C to stop.")
+		<-ctx.Done()
+		appLogger.Info("Shutting down file-watcher gracefully...")
+		mu.Lock()
+		cancelCurrent()
+		currentWg.Wait()
+		mu.Unlock()
+		appLogger.Info("Shutdown complete.")
+		return 0
 	}
+
+	// Single watch mode
+	args := flag.Args()
+	if len(args) < 3 {
+		printUsage()
+		return 1
+	}
+
+	watchDir := config.ExpandPath(args[0])
+	pattern := args[1]
+	destDir := config.ExpandPath(args[2])
+
+	w, err := watcher.New(watcher.Options{
+		WatchDir:        watchDir,
+		Pattern:         pattern,
+		DestDir:         destDir,
+		ExtractArchives: extractArchives,
+		PollInterval:    pollInterval,
+		UsePolling:      usePolling,
+		Logger:          appLogger,
+	})
+	if err != nil {
+		appLogger.Error("Failed to initialize watcher", "error", err)
+		return 1
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := w.Start(ctx); err != nil && err != context.Canceled {
+			appLogger.Error("Watcher stopped with error", "error", err)
+		}
+	}()
 
 	appLogger.Info("file-watcher process running. Press Ctrl+C to stop.")
 	<-ctx.Done()
