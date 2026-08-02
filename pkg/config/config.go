@@ -31,7 +31,7 @@ func ExpandPath(path string) string {
 		return ""
 	}
 	path = os.ExpandEnv(path)
-	if strings.HasPrefix(path, "~/") || path == "~" {
+	if strings.HasPrefix(path, "~/") || strings.HasPrefix(path, "~\\") || path == "~" {
 		home, err := os.UserHomeDir()
 		if err == nil {
 			if path == "~" {

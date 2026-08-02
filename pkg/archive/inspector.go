@@ -3,7 +3,6 @@ package archive
 import (
 	"archive/tar"
 	"archive/zip"
-	"bytes"
 	"compress/bzip2"
 	"compress/gzip"
 	"fmt"
@@ -30,163 +29,84 @@ func IsArchive(path string) bool {
 	return false
 }
 
-type ArchiveEntry struct {
-	Name   string
-	IsFile bool
-	Open   func() (io.ReadCloser, error)
-}
-
 // InspectAndExtractSingleFile checks if archive contains exactly one file matching targetPattern.
 // If matched, extracts it to destDir (handling duplicate filenames) and removes the archive file.
 func InspectAndExtractSingleFile(archivePath, targetPattern, destDir string) (bool, string, error) {
-	entries, err := listArchiveEntries(archivePath)
-	if err != nil {
-		return false, "", fmt.Errorf("failed to list archive entries: %w", err)
-	}
-
-	var files []ArchiveEntry
-	for _, entry := range entries {
-		if entry.IsFile {
-			files = append(files, entry)
-		}
-	}
-
-	if len(files) != 1 {
-		// Needs to contain exactly one file
-		return false, "", nil
-	}
-
-	singleFile := files[0]
-	baseName := filepath.Base(singleFile.Name)
-
-	matched, err := pattern.Match(targetPattern, baseName)
-	if err != nil || !matched {
-		return false, "", err
-	}
-
-	// Read content
-	reader, err := singleFile.Open()
-	if err != nil {
-		return false, "", fmt.Errorf("failed to open entry reader: %w", err)
-	}
-	defer reader.Close()
-
-	// Resolve destination file path using pattern package helper
-	targetName := pattern.ResolveTarget(baseName, func(name string) bool {
-		_, err := os.Stat(filepath.Join(destDir, name))
-		return err == nil
-	})
-
-	destPath := filepath.Join(destDir, targetName)
-
-	// Ensure target directory exists
-	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return false, "", fmt.Errorf("failed to create destination dir: %w", err)
-	}
-
-	outFile, err := os.Create(destPath)
-	if err != nil {
-		return false, "", fmt.Errorf("failed to create destination file: %w", err)
-	}
-	defer outFile.Close()
-
-	if _, err := io.Copy(outFile, reader); err != nil {
-		return false, "", fmt.Errorf("failed to copy content: %w", err)
-	}
-
-	_ = outFile.Close()
-
-	// Remove original archive file
-	_ = os.Remove(archivePath)
-
-	return true, destPath, nil
-}
-
-func listArchiveEntries(archivePath string) ([]ArchiveEntry, error) {
 	lower := strings.ToLower(archivePath)
 	if strings.HasSuffix(lower, ".zip") {
-		return listZipEntries(archivePath)
+		return inspectAndExtractZip(archivePath, targetPattern, destDir)
 	}
-	return listTarEntries(archivePath)
+	return inspectAndExtractTar(archivePath, targetPattern, destDir)
 }
 
-func listZipEntries(archivePath string) ([]ArchiveEntry, error) {
+func inspectAndExtractZip(archivePath, targetPattern, destDir string) (bool, string, error) {
 	r, err := zip.OpenReader(archivePath)
 	if err != nil {
-		return nil, err
+		return false, "", fmt.Errorf("failed to open zip: %w", err)
 	}
 
-	var entries []ArchiveEntry
+	var targetFile *zip.File
+	fileCount := 0
+
 	for _, f := range r.File {
 		fInfo := f.FileInfo()
 		if fInfo.IsDir() || strings.HasSuffix(f.Name, "/") {
 			continue
 		}
-		fileObj := f
-		entries = append(entries, ArchiveEntry{
-			Name:   f.Name,
-			IsFile: true,
-			Open: func() (io.ReadCloser, error) {
-				return fileObj.Open()
-			},
-		})
+		fileCount++
+		if fileCount > 1 {
+			_ = r.Close()
+			return false, "", nil
+		}
+		targetFile = f
 	}
 
-	var buffered []ArchiveEntry
-	for _, e := range entries {
-		rc, err := e.Open()
-		if err != nil {
-			r.Close()
-			return nil, err
-		}
-		data, err := io.ReadAll(rc)
-		rc.Close()
-		if err != nil {
-			r.Close()
-			return nil, err
-		}
-		name := e.Name
-		buffered = append(buffered, ArchiveEntry{
-			Name:   name,
-			IsFile: true,
-			Open: func() (io.ReadCloser, error) {
-				return io.NopCloser(bytes.NewReader(data)), nil
-			},
-		})
+	if fileCount != 1 || targetFile == nil {
+		_ = r.Close()
+		return false, "", nil
 	}
-	r.Close()
-	return buffered, nil
+
+	baseName := filepath.Base(targetFile.Name)
+	matched, err := pattern.Match(targetPattern, baseName)
+	if err != nil || !matched {
+		_ = r.Close()
+		return false, "", err
+	}
+
+	rc, err := targetFile.Open()
+	if err != nil {
+		_ = r.Close()
+		return false, "", fmt.Errorf("failed to open zip entry: %w", err)
+	}
+
+	destPath, err := extractStream(rc, baseName, destDir)
+	_ = rc.Close()
+	_ = r.Close()
+
+	if err != nil {
+		return false, "", err
+	}
+
+	_ = os.Remove(archivePath)
+	return true, destPath, nil
 }
 
-func listTarEntries(archivePath string) ([]ArchiveEntry, error) {
+func inspectAndExtractTar(archivePath, targetPattern, destDir string) (bool, string, error) {
+	// Pass 1: Count files and check for single file match
 	file, err := os.Open(archivePath)
 	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	var reader io.Reader = file
-	lower := strings.ToLower(archivePath)
-
-	if strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz") {
-		gzr, err := gzip.NewReader(file)
-		if err != nil {
-			return nil, err
-		}
-		defer gzr.Close()
-		reader = gzr
-	} else if strings.HasSuffix(lower, ".tar.bz2") || strings.HasSuffix(lower, ".tbz") || strings.HasSuffix(lower, ".tbz2") {
-		reader = bzip2.NewReader(file)
-	} else if strings.HasSuffix(lower, ".tar.xz") || strings.HasSuffix(lower, ".txz") {
-		xzr, err := xz.NewReader(file)
-		if err != nil {
-			return nil, err
-		}
-		reader = xzr
+		return false, "", err
 	}
 
-	tr := tar.NewReader(reader)
-	var entries []ArchiveEntry
+	decomp, err := openDecompressor(file, archivePath)
+	if err != nil {
+		_ = file.Close()
+		return false, "", err
+	}
+
+	tr := tar.NewReader(decomp)
+	var singleEntryName string
+	fileCount := 0
 
 	for {
 		hdr, err := tr.Next()
@@ -194,28 +114,121 @@ func listTarEntries(archivePath string) ([]ArchiveEntry, error) {
 			break
 		}
 		if err != nil {
-			return nil, err
+			closeDecompressor(decomp)
+			_ = file.Close()
+			return false, "", err
 		}
 
 		if hdr.Typeflag == tar.TypeDir || strings.HasSuffix(hdr.Name, "/") {
 			continue
 		}
 
-		var buf bytes.Buffer
-		if _, err := io.Copy(&buf, tr); err != nil {
-			return nil, err
+		fileCount++
+		if fileCount > 1 {
+			break
 		}
-
-		data := buf.Bytes()
-		name := hdr.Name
-		entries = append(entries, ArchiveEntry{
-			Name:   name,
-			IsFile: true,
-			Open: func() (io.ReadCloser, error) {
-				return io.NopCloser(bytes.NewReader(data)), nil
-			},
-		})
+		singleEntryName = hdr.Name
 	}
 
-	return entries, nil
+	closeDecompressor(decomp)
+	_ = file.Close()
+
+	if fileCount != 1 {
+		return false, "", nil
+	}
+
+	baseName := filepath.Base(singleEntryName)
+	matched, err := pattern.Match(targetPattern, baseName)
+	if err != nil || !matched {
+		return false, "", err
+	}
+
+	// Pass 2: Extract the single target entry
+	file2, err := os.Open(archivePath)
+	if err != nil {
+		return false, "", err
+	}
+
+	decomp2, err := openDecompressor(file2, archivePath)
+	if err != nil {
+		_ = file2.Close()
+		return false, "", err
+	}
+
+	tr2 := tar.NewReader(decomp2)
+	var destPath string
+	var extractErr error
+
+	for {
+		hdr, err := tr2.Next()
+		if err != nil {
+			extractErr = err
+			break
+		}
+		if hdr.Name == singleEntryName {
+			destPath, extractErr = extractStream(tr2, baseName, destDir)
+			break
+		}
+	}
+
+	closeDecompressor(decomp2)
+	_ = file2.Close()
+
+	if extractErr != nil {
+		return false, "", extractErr
+	}
+
+	_ = os.Remove(archivePath)
+	return true, destPath, nil
+}
+
+func extractStream(r io.Reader, baseName, destDir string) (string, error) {
+	targetName := pattern.ResolveTarget(baseName, func(name string) bool {
+		_, err := os.Stat(filepath.Join(destDir, name))
+		return err == nil
+	})
+
+	destPath := filepath.Join(destDir, targetName)
+
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create destination dir: %w", err)
+	}
+
+	outFile, err := os.Create(destPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to create destination file: %w", err)
+	}
+
+	if _, err := io.Copy(outFile, r); err != nil {
+		_ = outFile.Close()
+		_ = os.Remove(destPath)
+		return "", fmt.Errorf("failed to copy content: %w", err)
+	}
+
+	if err := outFile.Close(); err != nil {
+		_ = os.Remove(destPath)
+		return "", fmt.Errorf("failed to close destination file: %w", err)
+	}
+
+	return destPath, nil
+}
+
+func openDecompressor(r io.Reader, path string) (io.Reader, error) {
+	lower := strings.ToLower(path)
+	if strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz") {
+		return gzip.NewReader(r)
+	}
+	if strings.HasSuffix(lower, ".tar.bz2") || strings.HasSuffix(lower, ".tbz") || strings.HasSuffix(lower, ".tbz2") {
+		return bzip2.NewReader(r), nil
+	}
+	if strings.HasSuffix(lower, ".tar.xz") || strings.HasSuffix(lower, ".txz") {
+		return xz.NewReader(r)
+	}
+	return r, nil
+}
+
+func closeDecompressor(r io.Reader) {
+	if cl, ok := r.(io.Closer); ok {
+		_ = cl.Close()
+	}
 }

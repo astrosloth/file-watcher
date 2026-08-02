@@ -21,6 +21,10 @@ import (
 const version = "1.0.0"
 
 func main() {
+	os.Exit(runMain())
+}
+
+func runMain() int {
 	var (
 		configFile      string
 		pollIntervalSec int
@@ -52,12 +56,12 @@ func main() {
 
 	if showVersion {
 		fmt.Printf("file-watcher v%s\n", version)
-		os.Exit(0)
+		return 0
 	}
 
 	if showHelp {
 		printUsage()
-		os.Exit(0)
+		return 0
 	}
 
 	// Daemon mode defaults for PID and log files
@@ -80,7 +84,7 @@ func main() {
 		fileLogger, err := logging.NewFileLogger(expandedLogFile, maxLogSize)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR: Failed to initialize file logger: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
 		logger = fileLogger
 	} else {
@@ -109,7 +113,7 @@ func main() {
 		cfg, err := config.LoadConfig(expandedConfig)
 		if err != nil {
 			logger.Error("Failed to load config file", "path", expandedConfig, "error", err)
-			os.Exit(1)
+			return 1
 		}
 
 		logger.Info("Starting file-watcher with multi-watch config", "count", len(cfg.Watches), "config", expandedConfig)
@@ -154,7 +158,7 @@ func main() {
 		args := flag.Args()
 		if len(args) < 3 {
 			printUsage()
-			os.Exit(1)
+			return 1
 		}
 
 		watchDir := config.ExpandPath(args[0])
@@ -172,7 +176,7 @@ func main() {
 		})
 		if err != nil {
 			logger.Error("Failed to initialize watcher", "error", err)
-			os.Exit(1)
+			return 1
 		}
 
 		wg.Add(1)
@@ -189,6 +193,7 @@ func main() {
 	logger.Info("Shutting down file-watcher gracefully...")
 	wg.Wait()
 	logger.Info("Shutdown complete.")
+	return 0
 }
 
 func isFlagPassed(name string) bool {

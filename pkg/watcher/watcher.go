@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"file-watcher/pkg/archive"
@@ -15,7 +16,9 @@ import (
 )
 
 type Watcher struct {
-	opts Options
+	opts    Options
+	mu      sync.Mutex
+	pending map[string]*time.Timer
 }
 
 // New creates a new Watcher instance with the specified Options struct.
@@ -36,7 +39,10 @@ func New(opts Options) (*Watcher, error) {
 		opts.Logger = slog.Default()
 	}
 
-	return &Watcher{opts: opts}, nil
+	return &Watcher{
+		opts:    opts,
+		pending: make(map[string]*time.Timer),
+	}, nil
 }
 
 func (w *Watcher) Start(ctx context.Context) error {
@@ -59,6 +65,15 @@ func (w *Watcher) Start(ctx context.Context) error {
 		return w.runPolling(ctx)
 	}
 	return w.runFSNotify(ctx)
+}
+
+func (w *Watcher) stopPendingTimers() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for p, t := range w.pending {
+		t.Stop()
+		delete(w.pending, p)
+	}
 }
 
 func (w *Watcher) processExistingFiles(ctx context.Context) {
@@ -85,6 +100,9 @@ func (w *Watcher) processExistingFiles(ctx context.Context) {
 }
 
 func (w *Watcher) handleFile(path string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil
 	}
@@ -147,6 +165,7 @@ func (w *Watcher) runFSNotify(ctx context.Context) error {
 		return w.runPolling(ctx)
 	}
 	defer fsWatcher.Close()
+	defer w.stopPendingTimers()
 
 	if err := fsWatcher.Add(w.opts.WatchDir); err != nil {
 		w.opts.Logger.Warn("fsnotify watch add failed, falling back to polling", "error", err)
@@ -170,17 +189,7 @@ func (w *Watcher) runFSNotify(ctx context.Context) error {
 				}
 
 				targetPath := event.Name
-				go func(p string) {
-					select {
-					case <-ctx.Done():
-						return
-					case <-time.After(w.opts.DebounceDelay):
-					}
-
-					if _, err := os.Stat(p); err == nil {
-						_ = w.handleFile(p)
-					}
-				}(targetPath)
+				w.scheduleDebounced(targetPath)
 			}
 		case err, ok := <-fsWatcher.Errors:
 			if !ok {
@@ -189,6 +198,25 @@ func (w *Watcher) runFSNotify(ctx context.Context) error {
 			w.opts.Logger.Error("fsnotify watcher error", "error", err)
 		}
 	}
+}
+
+func (w *Watcher) scheduleDebounced(targetPath string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if t, ok := w.pending[targetPath]; ok {
+		t.Stop()
+	}
+
+	w.pending[targetPath] = time.AfterFunc(w.opts.DebounceDelay, func() {
+		w.mu.Lock()
+		delete(w.pending, targetPath)
+		w.mu.Unlock()
+
+		if _, err := os.Stat(targetPath); err == nil {
+			_ = w.handleFile(targetPath)
+		}
+	})
 }
 
 func (w *Watcher) runPolling(ctx context.Context) error {
@@ -218,14 +246,18 @@ func copyAndRemove(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer out.Close()
 
 	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		os.Remove(dst)
 		return err
 	}
 
 	_ = in.Close()
-	_ = out.Close()
+	if err := out.Close(); err != nil {
+		os.Remove(dst)
+		return err
+	}
 
 	return os.Remove(src)
 }

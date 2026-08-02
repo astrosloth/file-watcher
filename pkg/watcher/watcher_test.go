@@ -231,3 +231,23 @@ func TestCopyAndRemove(t *testing.T) {
 		t.Errorf("dst content = %q; want %q", string(got), string(content))
 	}
 }
+
+func TestCopyAndRemoveFailureCleanup(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "copy_fail_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	src := filepath.Join(tmpDir, "nonexistent.txt")
+	dst := filepath.Join(tmpDir, "dst_fail.txt")
+
+	err = copyAndRemove(src, dst)
+	if err == nil {
+		t.Errorf("expected error for non-existent source, got nil")
+	}
+
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Errorf("destination file should not exist after failed copy")
+	}
+}

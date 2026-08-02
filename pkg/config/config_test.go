@@ -115,4 +115,9 @@ func TestExpandPath(t *testing.T) {
 	if expanded != expected {
 		t.Errorf("ExpandPath(~/Documents) = %q; want %q", expanded, expected)
 	}
+
+	expandedWin := config.ExpandPath("~\\Documents")
+	if expandedWin != expected {
+		t.Errorf("ExpandPath(~\\Documents) = %q; want %q", expandedWin, expected)
+	}
 }
