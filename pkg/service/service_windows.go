@@ -43,8 +43,11 @@ func Install(customConfig string) error {
 
 	targetExe := filepath.Join(targetDir, "file-watcher.exe")
 	if strings.ToLower(filepath.Clean(execPath)) != strings.ToLower(filepath.Clean(targetExe)) {
+		// Stop any running background instances of file-watcher before overwriting targetExe
+		stopRunningProcesses()
+
 		if err := copyFile(execPath, targetExe); err != nil {
-			return err
+			return fmt.Errorf("failed to create target binary: %w", err)
 		}
 	}
 
@@ -84,6 +87,13 @@ func Install(customConfig string) error {
 	return nil
 }
 
+func stopRunningProcesses() {
+	currentPid := os.Getpid()
+	stopCmd := exec.Command("taskkill", "/F", "/FI", fmt.Sprintf("PID ne %d", currentPid), "/IM", "file-watcher.exe")
+	stopCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	_ = stopCmd.Run()
+}
+
 // Uninstall removes the HKCU registry run key and stops any running background file-watcher processes.
 func Uninstall() error {
 	k, err := openRunKey(registry.SET_VALUE)
@@ -96,10 +106,7 @@ func Uninstall() error {
 	}
 
 	// Stop any running file-watcher background processes (excluding current process)
-	currentPid := os.Getpid()
-	stopCmd := exec.Command("taskkill", "/F", "/FI", fmt.Sprintf("PID ne %d", currentPid), "/IM", "file-watcher.exe")
-	stopCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	_ = stopCmd.Run()
+	stopRunningProcesses()
 
 	fmt.Println("Successfully uninstalled file-watcher Windows User Autostart.")
 	return nil

@@ -4,9 +4,14 @@ $ErrorActionPreference = "Stop"
 
 function Exit-WithPause {
     param([int]$code = 0)
-    if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+    if ($Host.Name -eq "ConsoleHost") {
         Write-Host "`nPress Enter to exit..." -ForegroundColor Gray
-        [void][System.Console]::ReadLine()
+        try {
+            [void]$Host.UI.ReadLine()
+        } catch {
+            # Fallback if ReadLine is not available
+            [void][System.Console]::ReadLine()
+        }
     }
     exit $code
 }
