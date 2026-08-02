@@ -19,12 +19,62 @@ Supports **Windows**, **Linux**, and **macOS**.
 
 ---
 
-## Installation & Building
+## Installation & Autostart Setup
 
-### Requirements
-- Go 1.22+
+### Automated Installation (User Autostart)
 
-### Build Binary
+`file-watcher` can be installed as an automatic background service for your user account (no Administrator/root privileges required).
+
+**Windows:**
+Right-click `install.ps1` and select **Run with PowerShell**, or run in PowerShell:
+```powershell
+.\install.ps1
+```
+
+**Linux / macOS / CLI:**
+```bash
+go build -o file-watcher ./cmd/file-watcher
+./file-watcher install
+```
+
+This will:
+- Copy the executable to `%LOCALAPPDATA%\file-watcher\` (Windows) or `~/.local/bin/` (Linux/macOS).
+- Create a starter configuration file at `~/.config/file-watcher/file-watcher.conf` if one does not exist.
+- Register user autostart (`HKCU Registry` on Windows, `systemd --user` on Linux, `launchd` on macOS).
+- Launch the background service immediately.
+
+---
+
+### Updating `file-watcher`
+
+To update `file-watcher` to a new version, simply re-run the installation step:
+
+**Windows:**
+```powershell
+.\install.ps1
+```
+
+**Linux / macOS / CLI:**
+```bash
+./file-watcher install
+```
+
+The installer will automatically stop any running background instance, overwrite the executable, preserve your existing configuration file, and restart the background service.
+
+---
+
+### Service Management
+
+| Action | Command |
+|---|---|
+| **Check Status** | `file-watcher status` |
+| **Install / Update** | `file-watcher install` |
+| **Uninstall** | `file-watcher uninstall` |
+
+---
+
+### Building Binary Manually
+
 ```powershell
 go build -o file-watcher.exe ./cmd/file-watcher
 ```
@@ -32,8 +82,6 @@ On Linux/macOS:
 ```bash
 go build -o file-watcher ./cmd/file-watcher
 ```
-
----
 
 ## Usage
 
