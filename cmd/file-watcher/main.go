@@ -158,7 +158,6 @@ func runMain() int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-
 	var cfg *config.Config
 	var expandedConfig string
 
@@ -200,27 +199,11 @@ func runMain() int {
 		appLogger.Info("Starting file-watcher", "count", len(c.Watches))
 
 		for _, wCfg := range c.Watches {
-			w, err := watcher.New(watcher.Options{
-				WatchDir:        wCfg.Dir,
-				Pattern:         wCfg.Pattern,
-				DestDir:         wCfg.Dest,
-				ExtractArchives: wCfg.ExtractArchives,
-				PollInterval:    time.Duration(wCfg.PollInterval) * time.Second,
-				UsePolling:      wCfg.UsePolling,
-				Logger:          appLogger.With("watch", wCfg.Name),
-			})
-			if err != nil {
-				appLogger.Error("Failed to create watch", "watch", wCfg.Name, "error", err)
-				continue
-			}
-
 			wg.Add(1)
-			go func(w *watcher.Watcher, name string) {
+			go func(wc config.WatchConfig) {
 				defer wg.Done()
-				if err := w.Start(watchCtx); err != nil && err != context.Canceled {
-					appLogger.Error("Watcher stopped with error", "watch", name, "error", err)
-				}
-			}(w, wCfg.Name)
+				runWatch(watchCtx, wc, appLogger)
+			}(wCfg)
 		}
 		return cancelFn, &wg
 	}
@@ -337,6 +320,41 @@ func applyFlagOverrides(cfg *config.Config, pollIntervalSec int, usePolling, ext
 			wCfg.ExtractArchives = extractArchives
 		}
 		cfg.Watches[name] = wCfg
+	}
+}
+
+// runWatch runs one watch and restarts it after unexpected exits until ctx is canceled.
+func runWatch(ctx context.Context, wc config.WatchConfig, log *slog.Logger) {
+	for {
+		w, err := watcher.New(watcher.Options{
+			WatchDir:        wc.Dir,
+			Pattern:         wc.Pattern,
+			DestDir:         wc.Dest,
+			ExtractArchives: wc.ExtractArchives,
+			PollInterval:    time.Duration(wc.PollInterval) * time.Second,
+			UsePolling:      wc.UsePolling,
+			Logger:          log.With("watch", wc.Name),
+		})
+		if err != nil {
+			log.Error("Failed to initialize watch", "watch", wc.Name, "error", err)
+			return
+		}
+
+		err = w.Start(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			log.Error("Watcher stopped unexpectedly, restarting in 5s", "watch", wc.Name, "error", err)
+		} else {
+			log.Warn("Watcher stopped unexpectedly, restarting in 5s", "watch", wc.Name)
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(5 * time.Second):
+		}
 	}
 }
 

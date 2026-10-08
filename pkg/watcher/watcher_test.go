@@ -341,3 +341,57 @@ func TestCopyAndRemoveAtomicTmpCleanup(t *testing.T) {
 		t.Errorf("staged .tmp file %s was not cleaned up after atomic rename", tmpPath)
 	}
 }
+
+func TestWatcherStartDestDirUnavailable(t *testing.T) {
+	watchDir := t.TempDir()
+	tmpDir := t.TempDir()
+
+	// Create a file where directory would be so MkdirAll fails
+	blockingFile := filepath.Join(tmpDir, "blocked")
+	if err := os.WriteFile(blockingFile, []byte("blocker"), 0644); err != nil {
+		t.Fatalf("failed to write blocking file: %v", err)
+	}
+	invalidDest := filepath.Join(blockingFile, "dest_sub")
+	if err := os.MkdirAll(invalidDest, 0755); err == nil {
+		t.Fatalf("precondition failed: MkdirAll(%s) unexpectedly succeeded", invalidDest)
+	}
+
+	l := logger.NewConsoleLogger(nil)
+	w, err := New(Options{
+		WatchDir:     watchDir,
+		Pattern:      "*.txt",
+		DestDir:      invalidDest,
+		PollInterval: 100 * time.Millisecond,
+		UsePolling:   true,
+		Logger:       l,
+	})
+	if err != nil {
+		t.Fatalf("failed to create watcher: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- w.Start(ctx)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("watcher exited prematurely on unavailable DestDir: %v", err)
+	default:
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil && err != context.Canceled {
+			t.Errorf("expected context.Canceled on shutdown, got: %v", err)
+		}
+	case <-time.After(1 * time.Second):
+		t.Errorf("watcher failed to stop within timeout")
+	}
+}

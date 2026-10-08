@@ -23,6 +23,7 @@ type Watcher struct {
 	pending    map[string]*time.Timer
 	processing map[string]bool
 	failed     map[string]time.Time
+	wg         sync.WaitGroup
 }
 
 // New initializes and validates a new Watcher instance with default fallback settings for missing options.
@@ -56,7 +57,7 @@ func New(opts Options) (*Watcher, error) {
 func (w *Watcher) Start(ctx context.Context) error {
 	if w.opts.DestDir != "" {
 		if err := os.MkdirAll(w.opts.DestDir, 0755); err != nil {
-			return fmt.Errorf("failed to create destination directory: %w", err)
+			w.opts.Logger.Warn("Destination directory unavailable at startup, will retry on file transfer", "dest", w.opts.DestDir, "error", err)
 		}
 	}
 
@@ -80,7 +81,9 @@ func (w *Watcher) stopPendingTimers() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for p, t := range w.pending {
-		t.Stop()
+		if t.Stop() {
+			w.wg.Done()
+		}
 		delete(w.pending, p)
 	}
 }
@@ -222,8 +225,9 @@ func (w *Watcher) runFSNotify(ctx context.Context) error {
 		w.opts.Logger.Warn("fsnotify creation failed, falling back to polling", "error", err)
 		return w.runPolling(ctx)
 	}
-	defer fsWatcher.Close()
+	defer w.wg.Wait()
 	defer w.stopPendingTimers()
+	defer fsWatcher.Close()
 
 	if err := fsWatcher.Add(w.opts.WatchDir); err != nil {
 		w.opts.Logger.Warn("fsnotify watch add failed, falling back to polling", "error", err)
@@ -263,11 +267,13 @@ func (w *Watcher) scheduleDebounced(targetPath string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	if t, ok := w.pending[targetPath]; ok {
-		t.Stop()
+	if t, ok := w.pending[targetPath]; ok && t.Stop() {
+		w.wg.Done()
 	}
 
+	w.wg.Add(1)
 	w.pending[targetPath] = time.AfterFunc(w.opts.DebounceDelay, func() {
+		defer w.wg.Done()
 		w.mu.Lock()
 		delete(w.pending, targetPath)
 		w.mu.Unlock()
