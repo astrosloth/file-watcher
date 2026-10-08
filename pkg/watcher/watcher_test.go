@@ -181,8 +181,7 @@ func TestWatcherArchiveExtraction(t *testing.T) {
 		t.Fatalf("failed to create watcher: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	go func() {
 		_ = w.Start(ctx)
@@ -233,8 +232,7 @@ func TestWatcherArchiveFallbackMove(t *testing.T) {
 		t.Fatalf("failed to create watcher: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	go func() {
 		_ = w.Start(ctx)

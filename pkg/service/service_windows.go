@@ -89,7 +89,15 @@ func Install(customConfig string) error {
 
 func stopRunningProcesses() {
 	currentPid := os.Getpid()
-	stopCmd := exec.Command("taskkill", "/F", "/FI", fmt.Sprintf("PID ne %d", currentPid), "/IM", "file-watcher.exe")
+	args := []string{"/F", "/FI", fmt.Sprintf("PID ne %d", currentPid), "/IM", "file-watcher.exe"}
+	if username := os.Getenv("USERNAME"); username != "" && !strings.ContainsAny(username, "\"\r\n") {
+		if strings.Contains(username, " ") {
+			args = append(args, "/FI", fmt.Sprintf("USERNAME eq \"%s\"", username))
+		} else {
+			args = append(args, "/FI", fmt.Sprintf("USERNAME eq %s", username))
+		}
+	}
+	stopCmd := exec.Command("taskkill", args...)
 	stopCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	_ = stopCmd.Run()
 }

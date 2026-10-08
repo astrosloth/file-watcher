@@ -25,7 +25,7 @@ func TestRotatingLogger(t *testing.T) {
 	}
 
 	// Write enough log messages to exceed 100 bytes
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		l.Info("This is a test log line meant to exceed size limit", "index", i)
 	}
 

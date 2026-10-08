@@ -15,7 +15,6 @@ func inspectAndExtractZip(archivePath, targetPattern, destDir string) (bool, str
 
 	entries := make([]randomAccessEntry, len(r.File))
 	for i, f := range r.File {
-		f := f
 		entries[i] = randomAccessEntry{
 			Name:  f.Name,
 			IsDir: f.FileInfo().IsDir(),

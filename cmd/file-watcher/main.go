@@ -158,8 +158,6 @@ func runMain() int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	pollInterval := time.Duration(pollIntervalSec) * time.Second
-	_ = pollInterval
 
 	var cfg *config.Config
 	var expandedConfig string
@@ -242,7 +240,16 @@ func runMain() int {
 				appLogger.Info("Config file hot-reloading active", "path", expandedConfig)
 
 				go func() {
-					var debounceTimer *time.Timer
+					var (
+						debounceTimer *time.Timer
+						timerCh       <-chan time.Time
+					)
+					defer func() {
+						if debounceTimer != nil {
+							debounceTimer.Stop()
+						}
+					}()
+
 					for {
 						select {
 						case <-ctx.Done():
@@ -256,32 +263,41 @@ func runMain() int {
 									_ = cfgWatcher.Add(expandedConfig)
 								}
 								if debounceTimer != nil {
-									debounceTimer.Stop()
+									debounceTimer.Reset(500 * time.Millisecond)
+								} else {
+									debounceTimer = time.NewTimer(500 * time.Millisecond)
 								}
-								debounceTimer = time.AfterFunc(500*time.Millisecond, func() {
-									appLogger.Info("Config file modification detected, validating...", "path", expandedConfig)
-									newCfg, err := config.LoadConfig(expandedConfig)
-									if err != nil {
-										appLogger.Error("Failed to reload config file (keeping existing configuration active)", "error", err)
-										return
-									}
-
-									applyFlagOverrides(newCfg, pollIntervalSec, usePolling, extractArchives)
-
-									appLogger.Info("Configuration reloaded successfully. Updating watch jobs...")
-									mu.Lock()
-									oldCancel := cancelCurrent
-									oldWg := currentWg
-									mu.Unlock()
-
-									oldCancel()
-									oldWg.Wait()
-
-									mu.Lock()
-									cancelCurrent, currentWg = startWatches(ctx, newCfg)
-									mu.Unlock()
-								})
+								timerCh = debounceTimer.C
 							}
+						case <-timerCh:
+							timerCh = nil
+							appLogger.Info("Config file modification detected, validating...", "path", expandedConfig)
+							newCfg, err := config.LoadConfig(expandedConfig)
+							if err != nil {
+								appLogger.Error("Failed to reload config file (keeping existing configuration active)", "error", err)
+								continue
+							}
+
+							applyFlagOverrides(newCfg, pollIntervalSec, usePolling, extractArchives)
+
+							appLogger.Info("Configuration reloaded successfully. Updating watch jobs...")
+							mu.Lock()
+							oldCancel := cancelCurrent
+							oldWg := currentWg
+							mu.Unlock()
+
+							oldCancel()
+							oldWg.Wait()
+
+							select {
+							case <-ctx.Done():
+								return
+							default:
+							}
+
+							mu.Lock()
+							cancelCurrent, currentWg = startWatches(ctx, newCfg)
+							mu.Unlock()
 						case err, ok := <-cfgWatcher.Errors:
 							if !ok {
 								return

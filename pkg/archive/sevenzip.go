@@ -16,7 +16,6 @@ func inspectAndExtract7z(archivePath, targetPattern, destDir string) (bool, stri
 
 	entries := make([]randomAccessEntry, len(r.File))
 	for i, f := range r.File {
-		f := f
 		entries[i] = randomAccessEntry{
 			Name:  f.Name,
 			IsDir: f.FileInfo().IsDir(),

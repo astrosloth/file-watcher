@@ -302,4 +302,111 @@ func TestInspectAndExtractSingleFile(t *testing.T) {
 			t.Errorf("expected error when inspecting invalid rar archive")
 		}
 	})
+
+	t.Run("zip entry with path traversal is sanitized to base name", func(t *testing.T) {
+		zipPath := createTestZip(t, map[string]string{
+			"../../evil.pdf": "traversal content",
+		})
+		defer os.Remove(zipPath)
+
+		destDir, err := os.MkdirTemp("", "dest_traversal_*")
+		if err != nil {
+			t.Fatalf("failed to create dest temp dir: %v", err)
+		}
+		defer os.RemoveAll(destDir)
+
+		extracted, destFile, err := archive.InspectAndExtractSingleFile(zipPath, "*.pdf", destDir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !extracted {
+			t.Fatalf("expected extracted to be true")
+		}
+		if filepath.Dir(destFile) != destDir {
+			t.Errorf("expected extracted file inside destDir, got %s", destFile)
+		}
+		if filepath.Base(destFile) != "evil.pdf" {
+			t.Errorf("expected base name evil.pdf, got %s", filepath.Base(destFile))
+		}
+	})
+
+	t.Run("zip entry collision resolves to incremented filename", func(t *testing.T) {
+		destDir, err := os.MkdirTemp("", "dest_collision_*")
+		if err != nil {
+			t.Fatalf("failed to create dest temp dir: %v", err)
+		}
+		defer os.RemoveAll(destDir)
+
+		// Create pre-existing file in destDir
+		if err := os.WriteFile(filepath.Join(destDir, "report.pdf"), []byte("existing"), 0644); err != nil {
+			t.Fatalf("failed to create existing file: %v", err)
+		}
+
+		zipPath := createTestZip(t, map[string]string{
+			"report.pdf": "new content",
+		})
+		defer os.Remove(zipPath)
+
+		extracted, destFile, err := archive.InspectAndExtractSingleFile(zipPath, "*.pdf", destDir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !extracted {
+			t.Fatalf("expected extracted to be true")
+		}
+		if filepath.Base(destFile) != "report_1.pdf" {
+			t.Errorf("expected base name report_1.pdf, got %s", filepath.Base(destFile))
+		}
+	})
+
+	t.Run("zip entry exceeding max size returns error", func(t *testing.T) {
+		destDir, err := os.MkdirTemp("", "dest_limit_*")
+		if err != nil {
+			t.Fatalf("failed to create dest temp dir: %v", err)
+		}
+		defer os.RemoveAll(destDir)
+
+		if archive.MaxExtractEntrySize <= 0 {
+			t.Fatalf("invalid MaxExtractEntrySize")
+		}
+
+		// Test with ExtractStreamBounded with small max size
+		const limit = 100
+		oversizedData := bytes.Repeat([]byte("A"), limit+50)
+		_, err = archive.ExtractStreamBounded(bytes.NewReader(oversizedData), "test.txt", destDir, limit)
+		if err == nil {
+			t.Fatalf("expected error when stream exceeds limit, got nil")
+		}
+
+		entries, readErr := os.ReadDir(destDir)
+		if readErr != nil {
+			t.Fatalf("failed to read destDir: %v", readErr)
+		}
+		if len(entries) != 0 {
+			t.Errorf("expected oversized partial file to be cleaned up, found %d files", len(entries))
+		}
+	})
+
+	t.Run("stream within size limit extracts successfully", func(t *testing.T) {
+		destDir, err := os.MkdirTemp("", "dest_within_limit_*")
+		if err != nil {
+			t.Fatalf("failed to create dest temp dir: %v", err)
+		}
+		defer os.RemoveAll(destDir)
+
+		const limit = 100
+		validData := bytes.Repeat([]byte("B"), limit)
+		destPath, err := archive.ExtractStreamBounded(bytes.NewReader(validData), "test.txt", destDir, limit)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		data, err := os.ReadFile(destPath)
+		if err != nil {
+			t.Fatalf("failed to read extracted file: %v", err)
+		}
+		if !bytes.Equal(data, validData) {
+			t.Errorf("extracted content does not match")
+		}
+	})
 }
+

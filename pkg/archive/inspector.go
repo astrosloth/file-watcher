@@ -3,6 +3,7 @@
 package archive
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -47,18 +48,36 @@ func InspectAndExtractSingleFile(archivePath, targetPattern, destDir string) (bo
 	return inspectAndExtractTar(archivePath, targetPattern, destDir)
 }
 
+// MaxExtractEntrySize is the maximum allowed size (500 MB) when extracting a single archive entry to prevent zip bombs.
+const MaxExtractEntrySize = 500 * 1024 * 1024
+
+// cleanEntryBaseName sanitizes entryName by normalizing separators and extracting the clean base filename.
+func cleanEntryBaseName(entryName string) string {
+	// Replace backslashes with forward slashes for cross-platform normalization
+	normalized := strings.ReplaceAll(entryName, "\\", "/")
+	base := filepath.Base(normalized)
+	if base == "." || base == "/" || base == ".." {
+		return ""
+	}
+	return base
+}
+
 // matchSinglePayload validates if the archive contains exactly one file entry matching targetPattern.
 func matchSinglePayload(entryName string, fileCount int, targetPattern string) (bool, string, error) {
 	if fileCount != 1 || entryName == "" {
 		return false, "", nil
 	}
-	baseName := filepath.Base(entryName)
+	baseName := cleanEntryBaseName(entryName)
+	if baseName == "" {
+		return false, "", nil
+	}
 	matched, err := pattern.Match(targetPattern, baseName)
 	if err != nil || !matched {
 		return false, "", err
 	}
 	return true, baseName, nil
 }
+
 
 // finalizeExtraction removes the original archive file upon successful extraction and returns extraction results.
 func finalizeExtraction(archivePath, destPath string, err error) (bool, string, error) {
@@ -197,34 +216,76 @@ func inspectAndExtractSequential(archivePath, targetPattern, destDir string, ope
 	return finalizeExtraction(archivePath, destPath, extractErr)
 }
 
-// extractStream copies from an entry stream reader r to destDir, resolving filename collisions.
+// extractStream copies from an entry stream reader r to destDir, resolving filename collisions,
+// bounded by MaxExtractEntrySize to protect against zip bombs.
 func extractStream(r io.Reader, baseName, destDir string) (string, error) {
-	targetName := pattern.ResolveTarget(baseName, func(name string) bool {
-		_, err := os.Stat(filepath.Join(destDir, name))
-		return err == nil
-	})
+	return ExtractStreamBounded(r, baseName, destDir, MaxExtractEntrySize)
+}
 
-	destPath := filepath.Join(destDir, targetName)
-
+// ExtractStreamBounded copies from an entry stream reader r to destDir, resolving filename collisions,
+// bounded by maxEntrySize to protect against archive/zip bombs.
+func ExtractStreamBounded(r io.Reader, baseName, destDir string, maxEntrySize int64) (string, error) {
 	if err := os.MkdirAll(destDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create destination dir: %w", err)
 	}
 
-	outFile, err := os.Create(destPath)
+	root, err := os.OpenRoot(destDir)
 	if err != nil {
-		return "", fmt.Errorf("failed to create destination file: %w", err)
+		return "", fmt.Errorf("failed to open root destination dir: %w", err)
+	}
+	defer root.Close()
+
+	ext := filepath.Ext(baseName)
+	nameWithoutExt := strings.TrimSuffix(baseName, ext)
+
+	var outFile *os.File
+	var candidate string
+	for counter := 0; ; counter++ {
+		if counter == 0 {
+			candidate = baseName
+		} else if ext != "" {
+			candidate = fmt.Sprintf("%s_%d%s", nameWithoutExt, counter, ext)
+		} else {
+			candidate = fmt.Sprintf("%s_%d", nameWithoutExt, counter)
+		}
+
+		f, err := root.OpenFile(candidate, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+		if err == nil {
+			outFile = f
+			break
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return "", fmt.Errorf("failed to create destination file: %w", err)
+		}
+	}
+	destPath := filepath.Join(destDir, candidate)
+	cleanup := func() {
+		if outFile != nil {
+			_ = outFile.Close()
+			outFile = nil
+		}
+		_ = root.Remove(candidate)
 	}
 
-	if _, err := io.Copy(outFile, r); err != nil {
-		_ = outFile.Close()
-		_ = os.Remove(destPath)
+	limitedReader := io.LimitReader(r, maxEntrySize+1)
+	n, err := io.Copy(outFile, limitedReader)
+	if err != nil {
+		cleanup()
 		return "", fmt.Errorf("failed to copy content: %w", err)
 	}
 
-	if err := outFile.Close(); err != nil {
-		_ = os.Remove(destPath)
-		return "", fmt.Errorf("failed to close destination file: %w", err)
+	if n > maxEntrySize {
+		cleanup()
+		return "", fmt.Errorf("archive entry exceeded maximum allowed size (%d bytes)", maxEntrySize)
+	}
+
+	closeErr := outFile.Close()
+	outFile = nil
+	if closeErr != nil {
+		_ = root.Remove(candidate)
+		return "", fmt.Errorf("failed to close destination file: %w", closeErr)
 	}
 
 	return destPath, nil
 }
+

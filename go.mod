@@ -1,6 +1,6 @@
 module file-watcher
 
-go 1.26.5
+go 1.27
 
 require (
 	github.com/bodgit/sevenzip v1.6.5
