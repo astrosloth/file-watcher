@@ -1,0 +1,20 @@
+changelog:
+  categories:
+    - title: Breaking Changes
+      labels:
+        - "breaking"
+    - title: Fixes & Improvements
+      labels:
+        - "fix"
+        - "bug"
+        - "improvement"
+    - title: Documentation
+      labels:
+        - "documentation"
+        - "docs"
+    - title: Dependencies
+      labels:
+        - "dependencies"
+  exclude:
+    labels:
+      - "skip-changelog"

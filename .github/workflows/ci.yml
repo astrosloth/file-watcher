@@ -6,17 +6,14 @@ on:
   pull_request:
     branches: [ main, master ]
 
-jobs:
-  test-and-lint:
-    name: Build, Lint & Test
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+defaults:
+  run:
+    shell: bash
 
-    defaults:
-      run:
-        shell: bash
+jobs:
+  lint-and-race:
+    name: Lint & Test with Race (Ubuntu)
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Code
@@ -44,3 +41,24 @@ jobs:
       - name: Build Binary
         run: go build -v ./cmd/file-watcher
 
+  test-matrix:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Run Tests
+        run: go test -v ./...
+
+      - name: Build Binary
+        run: go build -v ./cmd/file-watcher
