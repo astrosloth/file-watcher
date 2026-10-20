@@ -1,18 +1,13 @@
 [Unit]
-Description=File Watcher - monitors directories and moves matching files
-Documentation=file://%h/Source/file-watcher/README.md
-After=default.target
+Description=File Watcher User Service
+Documentation=https://github.com/fred/file-watcher
+After=network.target
 
 [Service]
 Type=simple
-# Uses config file for multiple watches - edit ~/.config/file-watcher/config to customize
-ExecStart=%h/Source/file-watcher/file-watcher.fish --config %h/.config/file-watcher/config
-Restart=on-failure
+ExecStart=%h/.local/bin/file-watcher --config %h/.config/file-watcher/file-watcher.conf --log-file %h/.local/state/file-watcher/file-watcher.log
+Restart=always
 RestartSec=5
-
-# Logging goes to journald by default (view with: journalctl --user -u file-watcher)
-StandardOutput=journal
-StandardError=journal
 
 [Install]
 WantedBy=default.target

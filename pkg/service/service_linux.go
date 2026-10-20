@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"file-watcher/pkg/config"
 )
@@ -38,7 +39,7 @@ Description=File Watcher User Service
 After=network.target
 
 [Service]
-ExecStart=%s --config %s --log-file %s
+ExecStart="%s" --config "%s" --log-file "%s"
 Restart=always
 RestartSec=5
 
@@ -58,7 +59,7 @@ WantedBy=default.target
 
 	_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
 	_ = exec.Command("systemctl", "--user", "enable", "--now", UnitName).Run()
-
+	_ = exec.Command("systemctl", "--user", "restart", UnitName).Run()
 	fmt.Println("Successfully installed file-watcher systemd user service!")
 	fmt.Printf("  Binary: %s\n", targetExe)
 	fmt.Printf("  Config: %s\n", cfgPath)
@@ -86,5 +87,5 @@ func Status() (string, error) {
 	if err != nil {
 		return "Inactive / Not Installed", nil
 	}
-	return fmt.Sprintf("systemd service status: %s", out), nil
+	return fmt.Sprintf("systemd service status: %s", strings.TrimSpace(string(out))), nil
 }

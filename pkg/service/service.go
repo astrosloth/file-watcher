@@ -43,29 +43,49 @@ const DefaultConfigTemplate = `# File Watcher Configuration
 
 // copyFile copies a source file to a destination file path.
 func copyFile(src, dst string) error {
-	in, err := os.Open(src)
+	cleanSrc := filepath.Clean(src)
+	cleanDst := filepath.Clean(dst)
+	if cleanSrc == cleanDst {
+		return nil
+	}
+
+	in, err := os.Open(cleanSrc)
 	if err != nil {
 		return fmt.Errorf("failed to open source binary: %w", err)
 	}
 	defer in.Close()
 
-	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(cleanDst), 0755); err != nil {
 		return fmt.Errorf("failed to create destination directory: %w", err)
 	}
 
-	out, err := os.Create(dst)
+	tmpDst := cleanDst + ".tmp"
+	out, err := os.OpenFile(tmpDst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
 	if err != nil {
 		return fmt.Errorf("failed to create target binary: %w", err)
 	}
 	defer func() {
 		_ = out.Close()
+		_ = os.Remove(tmpDst)
 	}()
 
 	if _, err := io.Copy(out, in); err != nil {
 		return fmt.Errorf("failed to copy binary: %w", err)
 	}
 
-	return out.Close()
+	if err := out.Sync(); err != nil {
+		return fmt.Errorf("failed to sync binary: %w", err)
+	}
+
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("failed to close binary: %w", err)
+	}
+
+	if err := os.Rename(tmpDst, cleanDst); err != nil {
+		return fmt.Errorf("failed to install binary: %w", err)
+	}
+
+	return nil
 }
 
 // EnsureDefaultConfig creates a default configuration file if targetPath does not exist.

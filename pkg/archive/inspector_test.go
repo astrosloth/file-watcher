@@ -409,4 +409,3 @@ func TestInspectAndExtractSingleFile(t *testing.T) {
 		}
 	})
 }
-

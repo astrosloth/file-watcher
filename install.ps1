@@ -26,7 +26,7 @@ try {
 
     if (-not (Test-Path $exePath)) {
         Write-Host "file-watcher.exe not found in $scriptDir. Building binary..." -ForegroundColor Yellow
-        go build -o $exePath ./cmd/file-watcher
+        go -C $scriptDir build -o $exePath ./cmd/file-watcher
         if ($LASTEXITCODE -ne 0) {
             Write-Host "Build failed! Please ensure Go is installed." -ForegroundColor Red
             Exit-WithPause 1

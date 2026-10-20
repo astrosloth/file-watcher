@@ -65,4 +65,26 @@ func TestCopyFile(t *testing.T) {
 	if string(content) != "hello world" {
 		t.Errorf("expected 'hello world', got '%s'", string(content))
 	}
+
+	// Test copyFile when src and dst are the same path
+	if err := copyFile(srcPath, srcPath); err != nil {
+		t.Fatalf("copyFile to same path failed: %v", err)
+	}
+	sameContent, err := os.ReadFile(srcPath)
+	if err != nil || string(sameContent) != "hello world" {
+		t.Errorf("expected 'hello world' after same-path copy, got '%s'", string(sameContent))
+	}
+
+	// Test copyFile overwriting existing destination
+	newSrc := filepath.Join(tempDir, "new.txt")
+	if err := os.WriteFile(newSrc, []byte("updated"), 0644); err != nil {
+		t.Fatalf("failed to write newSrc: %v", err)
+	}
+	if err := copyFile(newSrc, dstPath); err != nil {
+		t.Fatalf("copyFile overwrite failed: %v", err)
+	}
+	overwritten, _ := os.ReadFile(dstPath)
+	if string(overwritten) != "updated" {
+		t.Errorf("expected 'updated', got '%s'", string(overwritten))
+	}
 }

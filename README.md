@@ -33,10 +33,11 @@ Right-click `install.ps1` and select **Run with PowerShell**, or run in PowerShe
 
 **Linux / macOS / CLI:**
 ```bash
+./install.sh
+# Or manually:
 go build -o file-watcher ./cmd/file-watcher
 ./file-watcher install
 ```
-
 This will:
 - Copy the executable to `%LOCALAPPDATA%\file-watcher\` (Windows) or `~/.local/bin/` (Linux/macOS).
 - Create a starter configuration file at `~/.config/file-watcher/file-watcher.conf` if one does not exist.
@@ -56,9 +57,9 @@ To update `file-watcher` to a new version, simply re-run the installation step:
 
 **Linux / macOS / CLI:**
 ```bash
-./file-watcher install
+./install.sh
+# Or: ./file-watcher install
 ```
-
 The installer will automatically stop any running background instance, overwrite the executable, preserve your existing configuration file, and restart the background service.
 
 ---

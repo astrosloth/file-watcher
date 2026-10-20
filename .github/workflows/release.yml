@@ -66,6 +66,8 @@ jobs:
           cp README.md build_stage/
           if [ "${{ matrix.os }}" = "windows" ]; then
             cp install.ps1 build_stage/
+          else
+            cp install.sh build_stage/
           fi
 
       - name: Create Release Archive (ZIP)

@@ -78,7 +78,6 @@ func matchSinglePayload(entryName string, fileCount int, targetPattern string) (
 	return true, baseName, nil
 }
 
-
 // finalizeExtraction removes the original archive file upon successful extraction and returns extraction results.
 func finalizeExtraction(archivePath, destPath string, err error) (bool, string, error) {
 	if err != nil {
@@ -288,4 +287,3 @@ func ExtractStreamBounded(r io.Reader, baseName, destDir string, maxEntrySize in
 
 	return destPath, nil
 }
-
