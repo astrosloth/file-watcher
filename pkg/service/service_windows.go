@@ -42,10 +42,10 @@ func Install(customConfig string) error {
 	}
 
 	targetExe := filepath.Join(targetDir, "file-watcher.exe")
-	if strings.ToLower(filepath.Clean(execPath)) != strings.ToLower(filepath.Clean(targetExe)) {
-		// Stop any running background instances of file-watcher before overwriting targetExe
-		stopRunningProcesses()
+	// Stop any running background instances of file-watcher before updating/restarting
+	stopRunningProcesses()
 
+	if !strings.EqualFold(filepath.Clean(execPath), filepath.Clean(targetExe)) {
 		if err := copyFile(execPath, targetExe); err != nil {
 			return fmt.Errorf("failed to create target binary: %w", err)
 		}
@@ -57,7 +57,7 @@ func Install(customConfig string) error {
 	}
 
 	logFile := filepath.Join(targetDir, "file-watcher.log")
-	commandVal := fmt.Sprintf(`"%s" --config "%s" --log-file "%s"`, targetExe, cfgPath, logFile)
+	commandVal := fmt.Sprintf(`"%s" --daemon --config "%s" --log-file "%s"`, targetExe, cfgPath, logFile)
 
 	k, err := openRunKey(registry.SET_VALUE)
 	if err != nil {

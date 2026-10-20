@@ -24,8 +24,9 @@ try {
     $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
     $exePath = Join-Path $scriptDir "file-watcher.exe"
 
-    if (-not (Test-Path $exePath)) {
-        Write-Host "file-watcher.exe not found in $scriptDir. Building binary..." -ForegroundColor Yellow
+    $mainGo = Join-Path $scriptDir "cmd\file-watcher\main.go"
+    if ((Test-Path $mainGo) -or (-not (Test-Path $exePath))) {
+        Write-Host "Building file-watcher.exe..." -ForegroundColor Yellow
         go -C $scriptDir build -o $exePath ./cmd/file-watcher
         if ($LASTEXITCODE -ne 0) {
             Write-Host "Build failed! Please ensure Go is installed." -ForegroundColor Red

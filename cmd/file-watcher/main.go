@@ -118,7 +118,7 @@ func runMain() int {
 		if os.Getenv("FILE_WATCHER_DAEMON_CHILD") != "1" {
 			cmd := exec.Command(os.Args[0], os.Args[1:]...)
 			cmd.Env = append(os.Environ(), "FILE_WATCHER_DAEMON_CHILD=1")
-
+			detachDaemonProcess(cmd)
 			if err := cmd.Start(); err != nil {
 				fmt.Fprintf(os.Stderr, "ERROR: Failed to start daemon process: %v\n", err)
 				return 1
