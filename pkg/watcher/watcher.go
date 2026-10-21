@@ -34,6 +34,15 @@ func New(opts Options) (*Watcher, error) {
 
 	opts.WatchDir = filepath.Clean(opts.WatchDir)
 
+	if len(opts.Rules) == 0 && (opts.Pattern != "" || opts.DestDir != "") {
+		opts.Rules = []Rule{{
+			Name:            "default",
+			Pattern:         opts.Pattern,
+			DestDir:         opts.DestDir,
+			ExtractArchives: opts.ExtractArchives,
+		}}
+	}
+
 	if opts.PollInterval <= 0 {
 		opts.PollInterval = 5 * time.Second
 	}
@@ -55,16 +64,17 @@ func New(opts Options) (*Watcher, error) {
 // Start initiates the directory watching process using event-driven notification (fsnotify)
 // or periodic polling depending on configuration options. Blocks until the provided context is canceled.
 func (w *Watcher) Start(ctx context.Context) error {
-	if w.opts.DestDir != "" {
-		if err := os.MkdirAll(w.opts.DestDir, 0755); err != nil {
-			w.opts.Logger.Warn("Destination directory unavailable at startup, will retry on file transfer", "dest", w.opts.DestDir, "error", err)
+	for _, r := range w.opts.Rules {
+		if r.DestDir != "" {
+			if err := os.MkdirAll(r.DestDir, 0755); err != nil {
+				w.opts.Logger.Warn("Destination directory unavailable at startup, will retry on file transfer", "dest", r.DestDir, "error", err)
+			}
 		}
 	}
 
 	w.opts.Logger.Info("Starting watcher",
 		"dir", w.opts.WatchDir,
-		"pattern", w.opts.Pattern,
-		"dest", w.opts.DestDir,
+		"rule_count", len(w.opts.Rules),
 		"use_polling", w.opts.UsePolling,
 	)
 
@@ -109,11 +119,25 @@ func (w *Watcher) processExistingFiles(ctx context.Context) {
 			continue
 		}
 
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		// Ensure file has stopped being written. For fast poll intervals (e.g. tests),
+		// scale threshold so files aren't unnecessarily starved.
+		settleDelay := w.opts.DebounceDelay
+		if w.opts.PollInterval < settleDelay {
+			settleDelay = w.opts.PollInterval / 2
+		}
+		if settleDelay > 0 && time.Since(info.ModTime()) < settleDelay {
+			continue
+		}
+
 		path := filepath.Join(w.opts.WatchDir, entry.Name())
 		_ = w.handleFile(path)
 	}
 }
-
 func (w *Watcher) pruneFailures() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -152,57 +176,50 @@ func (w *Watcher) handleFile(path string) error {
 
 	baseName := filepath.Base(path)
 
-	// Check pattern match
-	matched, err := pattern.Match(w.opts.Pattern, baseName)
-	if err != nil {
-		return err
-	}
-
-	// 1. Single-file archive extraction
-	if w.opts.ExtractArchives && archive.IsSupported(path) {
-		extracted, destPath, err := archive.InspectAndExtractSingleFile(path, w.opts.Pattern, w.opts.DestDir)
+	for _, rule := range w.opts.Rules {
+		matched, err := pattern.Match(rule.Pattern, baseName)
 		if err != nil {
-			w.opts.Logger.Error("Failed processing archive", "archive", baseName, "error", err)
+			return err
+		}
+
+		// 1. Single-file archive extraction
+		if rule.ExtractArchives && archive.IsSupported(path) {
+			extracted, destPath, err := archive.InspectAndExtractSingleFile(path, rule.Pattern, rule.DestDir)
+			if err != nil {
+				w.opts.Logger.Error("Failed processing archive", "rule", rule.Name, "archive", baseName, "error", err)
+				w.recordFailure(path)
+				return err
+			}
+			if extracted {
+				w.opts.Logger.Info("Extracted single archive file", "rule", rule.Name, "archive", baseName, "dest", destPath)
+				w.clearFailure(path)
+				return nil
+			}
+			// If archive was not extracted, fall through to check if archive file itself matches rule pattern
+		}
+
+		if !matched {
+			continue
+		}
+
+		if err := os.MkdirAll(rule.DestDir, 0755); err != nil {
+			w.recordFailure(path)
+			return fmt.Errorf("failed to create destination directory: %w", err)
+		}
+
+		// Move file to destination with atomic reservation against concurrent overwrites
+		destPath, err := moveFileToDest(path, baseName, rule.DestDir)
+		if err != nil {
+			w.opts.Logger.Error("Failed to move file", "rule", rule.Name, "source", path, "error", err)
 			w.recordFailure(path)
 			return err
 		}
-		if extracted {
-			w.opts.Logger.Info("Extracted single archive file", "archive", baseName, "dest", destPath)
-			w.clearFailure(path)
-			return nil
-		}
-		// If archive was not extracted, fall through to check if the archive itself matches pattern
-	}
 
-	// 2. Skip non-matching files
-	if !matched {
+		w.clearFailure(path)
+		w.opts.Logger.Info("Moved file", "rule", rule.Name, "file", baseName, "dest", destPath)
 		return nil
 	}
 
-	// 3. Resolve target duplicate filename using pattern package helper
-	targetName := pattern.ResolveTarget(baseName, func(name string) bool {
-		_, err := os.Stat(filepath.Join(w.opts.DestDir, name))
-		return err == nil
-	})
-
-	destPath := filepath.Join(w.opts.DestDir, targetName)
-
-	if err := os.MkdirAll(w.opts.DestDir, 0755); err != nil {
-		w.recordFailure(path)
-		return fmt.Errorf("failed to create destination directory: %w", err)
-	}
-
-	// 4. Move file to destination
-	if err := os.Rename(path, destPath); err != nil {
-		if err := copyAndRemove(path, destPath); err != nil {
-			w.opts.Logger.Error("Failed to move file", "source", path, "dest", destPath, "error", err)
-			w.recordFailure(path)
-			return err
-		}
-	}
-
-	w.clearFailure(path)
-	w.opts.Logger.Info("Moved file", "file", baseName, "dest", destPath)
 	return nil
 }
 
@@ -357,4 +374,45 @@ func atomicCopyFile(src, tmpDst, finalDst string, mode os.FileMode) error {
 	}
 
 	return os.Rename(tmpDst, finalDst)
+}
+
+// moveFileToDest reserves a non-colliding destination path atomically and moves or copies src into it.
+func moveFileToDest(src, baseName, destDir string) (string, error) {
+	root, err := os.OpenRoot(destDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to open root destination dir: %w", err)
+	}
+	defer root.Close()
+
+	for counter := 0; ; counter++ {
+		candidate := pattern.CandidateName(baseName, counter)
+		destPath := filepath.Join(destDir, candidate)
+
+		// Try hard link first (same filesystem): atomic, succeeds only if destPath doesn't exist
+		err := os.Link(src, destPath)
+		if err == nil {
+			_ = os.Remove(src)
+			return destPath, nil
+		}
+		if os.IsExist(err) {
+			continue
+		}
+
+		// If Link fails not because of existing target (e.g. cross-device link or unsupported),
+		// reserve candidate name exclusively before copying.
+		f, err := root.OpenFile(candidate, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+		if err == nil {
+			_ = f.Close()
+			if err := copyAndRemove(src, destPath); err != nil {
+				_ = root.Remove(candidate)
+				return "", err
+			}
+			return destPath, nil
+		}
+		if os.IsExist(err) {
+			continue
+		}
+
+		return "", fmt.Errorf("failed to reserve destination file: %w", err)
+	}
 }

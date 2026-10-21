@@ -7,18 +7,29 @@ import (
 	"time"
 )
 
+// Rule specifies matching and destination settings for files in the watched directory.
+type Rule struct {
+	Name            string
+	Pattern         string
+	DestDir         string
+	ExtractArchives bool
+}
+
 // Options specifies configuration settings for directory watching operations.
 type Options struct {
 	// WatchDir is the absolute or relative directory path to monitor for incoming files.
 	WatchDir string
 
-	// Pattern is the glob pattern used to match target files (e.g. "*.pdf", "*.{jpg,png}").
+	// Rules specifies one or more matching rules evaluated in order for incoming files.
+	Rules []Rule
+
+	// Pattern is the glob pattern used to match target files (single-rule shorthand).
 	Pattern string
 
-	// DestDir is the directory path where matched files will be moved or extracted.
+	// DestDir is the directory path where matched files will be moved or extracted (single-rule shorthand).
 	DestDir string
 
-	// ExtractArchives enables automatic single-file archive inspection and extraction.
+	// ExtractArchives enables automatic single-file archive inspection and extraction (single-rule shorthand).
 	ExtractArchives bool
 
 	// PollInterval sets the frequency at which directory contents are scanned when polling mode is active.

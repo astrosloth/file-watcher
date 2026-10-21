@@ -395,3 +395,44 @@ func TestWatcherStartDestDirUnavailable(t *testing.T) {
 		t.Errorf("watcher failed to stop within timeout")
 	}
 }
+
+func TestWatcherMultipleRulesInSameDirectory(t *testing.T) {
+	watchDir := t.TempDir()
+	pdfDest := filepath.Join(t.TempDir(), "pdfs")
+	imgDest := filepath.Join(t.TempDir(), "images")
+
+	w, err := New(Options{
+		WatchDir: watchDir,
+		Rules: []Rule{
+			{Name: "pdfs", Pattern: "*.pdf", DestDir: pdfDest},
+			{Name: "images", Pattern: "*.png", DestDir: imgDest},
+		},
+		PollInterval: 100 * time.Millisecond,
+		UsePolling:   true,
+		Logger:       logger.NewConsoleLogger(nil),
+	})
+	if err != nil {
+		t.Fatalf("failed to create watcher: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		_ = w.Start(ctx)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	_ = os.WriteFile(filepath.Join(watchDir, "report.pdf"), []byte("pdf"), 0644)
+	_ = os.WriteFile(filepath.Join(watchDir, "photo.png"), []byte("png"), 0644)
+
+	time.Sleep(300 * time.Millisecond)
+
+	if _, err := os.Stat(filepath.Join(pdfDest, "report.pdf")); os.IsNotExist(err) {
+		t.Errorf("report.pdf was not moved to pdfDest")
+	}
+	if _, err := os.Stat(filepath.Join(imgDest, "photo.png")); os.IsNotExist(err) {
+		t.Errorf("photo.png was not moved to imgDest")
+	}
+}

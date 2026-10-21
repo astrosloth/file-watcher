@@ -234,56 +234,63 @@ func ExtractStreamBounded(r io.Reader, baseName, destDir string, maxEntrySize in
 	}
 	defer root.Close()
 
-	ext := filepath.Ext(baseName)
-	nameWithoutExt := strings.TrimSuffix(baseName, ext)
-
-	var outFile *os.File
-	var candidate string
-	for counter := 0; ; counter++ {
-		if counter == 0 {
-			candidate = baseName
-		} else if ext != "" {
-			candidate = fmt.Sprintf("%s_%d%s", nameWithoutExt, counter, ext)
-		} else {
-			candidate = fmt.Sprintf("%s_%d", nameWithoutExt, counter)
-		}
-
-		f, err := root.OpenFile(candidate, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
-		if err == nil {
-			outFile = f
-			break
-		}
-		if !errors.Is(err, os.ErrExist) {
-			return "", fmt.Errorf("failed to create destination file: %w", err)
-		}
+	// Extract into a temporary file first, sync and close, then place atomically into candidate name.
+	// This prevents consumers in destDir from observing partially extracted files.
+	tmpFile, err := os.CreateTemp(destDir, ".extract-*.tmp")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temporary extraction file: %w", err)
 	}
-	destPath := filepath.Join(destDir, candidate)
-	cleanup := func() {
-		if outFile != nil {
-			_ = outFile.Close()
-			outFile = nil
+	tmpPath := tmpFile.Name()
+	defer func() {
+		if tmpFile != nil {
+			_ = tmpFile.Close()
+			_ = os.Remove(tmpPath)
 		}
-		_ = root.Remove(candidate)
-	}
+	}()
 
 	limitedReader := io.LimitReader(r, maxEntrySize+1)
-	n, err := io.Copy(outFile, limitedReader)
+	n, err := io.Copy(tmpFile, limitedReader)
 	if err != nil {
-		cleanup()
 		return "", fmt.Errorf("failed to copy content: %w", err)
 	}
 
 	if n > maxEntrySize {
-		cleanup()
 		return "", fmt.Errorf("archive entry exceeded maximum allowed size (%d bytes)", maxEntrySize)
 	}
 
-	closeErr := outFile.Close()
-	outFile = nil
-	if closeErr != nil {
-		_ = root.Remove(candidate)
-		return "", fmt.Errorf("failed to close destination file: %w", closeErr)
+	if err := tmpFile.Sync(); err != nil {
+		return "", fmt.Errorf("failed to sync extraction file: %w", err)
 	}
 
-	return destPath, nil
+	if err := tmpFile.Close(); err != nil {
+		return "", fmt.Errorf("failed to close extraction file: %w", err)
+	}
+	tmpFile = nil
+
+	// Place atomically into unique candidate name without overwriting
+	for counter := 0; ; counter++ {
+		candidate := pattern.CandidateName(baseName, counter)
+		destPath := filepath.Join(destDir, candidate)
+		// Use os.Link if possible for atomic reservation from tmpPath, or try exclusive create/rename
+		err := os.Link(tmpPath, destPath)
+		if err == nil {
+			_ = os.Remove(tmpPath)
+			return destPath, nil
+		}
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		// Fallback for filesystems where Link is not supported (e.g. cross-volume or FAT)
+		f, err := root.OpenFile(candidate, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+		if err == nil {
+			_ = f.Close()
+			if err := os.Rename(tmpPath, destPath); err == nil {
+				return destPath, nil
+			}
+			_ = root.Remove(candidate)
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return "", fmt.Errorf("failed to reserve destination file: %w", err)
+		}
+	}
 }

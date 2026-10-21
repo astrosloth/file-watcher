@@ -196,14 +196,52 @@ func runMain() int {
 		watchCtx, cancelFn := context.WithCancel(parentCtx)
 		var wg sync.WaitGroup
 
-		appLogger.Info("Starting file-watcher", "count", len(c.Watches))
+		// Group watch rules by directory so watches sharing the same folder share
+		// a single inotify/fsnotify listener and evaluate rules deterministically.
+		type dirGroup struct {
+			dir          string
+			rules        []watcher.Rule
+			pollInterval int
+			usePolling   bool
+		}
+		groups := make(map[string]*dirGroup)
+		var groupOrder []string
 
 		for _, wCfg := range c.Watches {
+			cleanDir := filepath.Clean(wCfg.Dir)
+			g, exists := groups[cleanDir]
+			if !exists {
+				g = &dirGroup{
+					dir:          cleanDir,
+					pollInterval: wCfg.PollInterval,
+					usePolling:   wCfg.UsePolling,
+				}
+				groups[cleanDir] = g
+				groupOrder = append(groupOrder, cleanDir)
+			}
+			if wCfg.UsePolling {
+				g.usePolling = true
+			}
+			if wCfg.PollInterval > 0 && (g.pollInterval <= 0 || wCfg.PollInterval < g.pollInterval) {
+				g.pollInterval = wCfg.PollInterval
+			}
+			g.rules = append(g.rules, watcher.Rule{
+				Name:            wCfg.Name,
+				Pattern:         wCfg.Pattern,
+				DestDir:         wCfg.Dest,
+				ExtractArchives: wCfg.ExtractArchives,
+			})
+		}
+
+		appLogger.Info("Starting file-watcher", "dir_count", len(groups), "rule_count", len(c.Watches))
+
+		for _, dir := range groupOrder {
+			g := groups[dir]
 			wg.Add(1)
-			go func(wc config.WatchConfig) {
+			go func(dg *dirGroup) {
 				defer wg.Done()
-				runWatch(watchCtx, wc, appLogger)
-			}(wCfg)
+				runWatchGroup(watchCtx, dg.dir, dg.rules, dg.pollInterval, dg.usePolling, appLogger)
+			}(g)
 		}
 		return cancelFn, &wg
 	}
@@ -212,13 +250,15 @@ func runMain() int {
 	cancelCurrent, currentWg := startWatches(ctx, cfg)
 
 	if expandedConfig != "" {
+		cfgDir := filepath.Dir(expandedConfig)
+		cfgBase := filepath.Base(expandedConfig)
 		cfgWatcher, err := fsnotify.NewWatcher()
 		if err != nil {
 			appLogger.Warn("Failed to create config file watcher, hot-reloading disabled", "error", err)
 		} else {
 			defer cfgWatcher.Close()
-			if err := cfgWatcher.Add(expandedConfig); err != nil {
-				appLogger.Warn("Failed to watch config file for changes", "path", expandedConfig, "error", err)
+			if err := cfgWatcher.Add(cfgDir); err != nil {
+				appLogger.Warn("Failed to watch config directory for changes", "dir", cfgDir, "error", err)
 			} else {
 				appLogger.Info("Config file hot-reloading active", "path", expandedConfig)
 
@@ -241,10 +281,11 @@ func runMain() int {
 							if !ok {
 								return
 							}
+							// Filter events to only the target config file name
+							if filepath.Base(event.Name) != cfgBase {
+								continue
+							}
 							if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) || event.Has(fsnotify.Rename) {
-								if event.Has(fsnotify.Create) || event.Has(fsnotify.Rename) {
-									_ = cfgWatcher.Add(expandedConfig)
-								}
 								if debounceTimer != nil {
 									debounceTimer.Reset(500 * time.Millisecond)
 								} else {
@@ -323,20 +364,18 @@ func applyFlagOverrides(cfg *config.Config, pollIntervalSec int, usePolling, ext
 	}
 }
 
-// runWatch runs one watch and restarts it after unexpected exits until ctx is canceled.
-func runWatch(ctx context.Context, wc config.WatchConfig, log *slog.Logger) {
+// runWatchGroup runs one watcher instance for a directory and its rules, restarting it on error until ctx is canceled.
+func runWatchGroup(ctx context.Context, dir string, rules []watcher.Rule, pollIntervalSec int, usePolling bool, log *slog.Logger) {
 	for {
 		w, err := watcher.New(watcher.Options{
-			WatchDir:        wc.Dir,
-			Pattern:         wc.Pattern,
-			DestDir:         wc.Dest,
-			ExtractArchives: wc.ExtractArchives,
-			PollInterval:    time.Duration(wc.PollInterval) * time.Second,
-			UsePolling:      wc.UsePolling,
-			Logger:          log.With("watch", wc.Name),
+			WatchDir:     dir,
+			Rules:        rules,
+			PollInterval: time.Duration(pollIntervalSec) * time.Second,
+			UsePolling:   usePolling,
+			Logger:       log.With("dir", dir),
 		})
 		if err != nil {
-			log.Error("Failed to initialize watch", "watch", wc.Name, "error", err)
+			log.Error("Failed to initialize watch for directory", "dir", dir, "error", err)
 			return
 		}
 
@@ -345,9 +384,9 @@ func runWatch(ctx context.Context, wc config.WatchConfig, log *slog.Logger) {
 			return
 		}
 		if err != nil {
-			log.Error("Watcher stopped unexpectedly, restarting in 5s", "watch", wc.Name, "error", err)
+			log.Error("Watcher stopped unexpectedly, restarting in 5s", "dir", dir, "error", err)
 		} else {
-			log.Warn("Watcher stopped unexpectedly, restarting in 5s", "watch", wc.Name)
+			log.Warn("Watcher stopped unexpectedly, restarting in 5s", "dir", dir)
 		}
 
 		select {

@@ -2,35 +2,31 @@ package main
 
 import (
 	"context"
+	"file-watcher/pkg/watcher"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
-
-	"file-watcher/pkg/config"
 )
 
-func TestRunWatchStopsOnCancel(t *testing.T) {
+func TestRunWatchGroupStopsOnCancel(t *testing.T) {
 	watchDir := t.TempDir()
 	destDir := filepath.Join(t.TempDir(), "dest")
 	if err := os.MkdirAll(destDir, 0755); err != nil {
 		t.Fatalf("failed to create dest dir: %v", err)
 	}
 
-	wc := config.WatchConfig{
-		Name:         "test",
-		Dir:          watchDir,
-		Pattern:      "*.txt",
-		Dest:         destDir,
-		PollInterval: 1,
-		UsePolling:   true,
-	}
+	rules := []watcher.Rule{{
+		Name:    "test",
+		Pattern: "*.txt",
+		DestDir: destDir,
+	}}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		runWatch(ctx, wc, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+		runWatchGroup(ctx, watchDir, rules, 1, true, slog.New(slog.NewTextHandler(os.Stderr, nil)))
 		close(done)
 	}()
 
@@ -40,6 +36,6 @@ func TestRunWatchStopsOnCancel(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(1 * time.Second):
-		t.Fatal("runWatch did not return after context cancel")
+		t.Fatal("runWatchGroup did not return after context cancel")
 	}
 }
