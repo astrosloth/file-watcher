@@ -5,9 +5,9 @@ go 1.27
 require (
 	github.com/bodgit/sevenzip v1.6.5
 	github.com/fsnotify/fsnotify v1.10.1
-	github.com/nwaples/rardecode/v2 v2.4.1
+	github.com/nwaples/rardecode/v2 v2.4.5
 	github.com/ulikunitz/xz v0.5.17
-	golang.org/x/sys v0.40.0
+	golang.org/x/sys v0.49.0
 )
 
 require (
